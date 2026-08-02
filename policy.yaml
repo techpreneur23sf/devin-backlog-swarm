@@ -1,0 +1,59 @@
+# Trust tiers, budgets and the kill switch for the backlog swarm.
+#
+# Everything the reconciler is allowed to do without a human is described here
+# and nowhere else. Flip `kill_switch` to true and the swarm dispatches nothing
+# and merges nothing on the next tick (~10 minutes), with no code change.
+
+kill_switch: false
+
+budget:
+  daily_acu_cap: 120          # hard stop, checked against the consumption API
+  per_session_acu_cap: 12     # passed to the API as max_acu_limit
+  max_concurrent_sessions: 6
+  max_attempts_per_issue: 2
+  waiting_for_user_ticks: 3   # reconcile ticks idle before sweeping to needs_human
+
+# Dispatch order when the scheduler has more queued work than slots.
+class_priority:
+  - security
+  - authz
+  - dep-bump-patch
+  - dep-bump-major
+  - deprecation
+  - code-quality
+
+# Per-class ACU ceilings. Mechanical work should never cost what judgement work
+# costs; if it does, the playbook is wrong.
+acu_limit_by_class:
+  dep-bump-patch: 6
+  deprecation: 10
+  code-quality: 10
+  dep-bump-major: 14
+  security: 14
+  authz: 14
+
+tiers:
+  auto_merge:
+    classes: [dep-bump-patch]
+    require:
+      ci: green
+      review: clean
+      confidence: high
+      max_files_changed: 3
+
+  auto_merge_on_clean_review:
+    classes: [deprecation, code-quality, dep-bump-major]
+    require:
+      ci: green
+      review: clean
+      confidence: [high, medium]
+      max_files_changed: 25
+
+  always_human:
+    classes: [security, authz]
+    matches:
+      paths:
+        - "superset/security/**"
+        - "superset/views/base*.py"
+        - "**/auth/**"
+      blockers_nonempty: true

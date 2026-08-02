@@ -103,6 +103,22 @@ class Transport:
             raise ReplayMiss(f"no cassette at {self._path}")
         self._cassette = json.loads(self._path.read_text())
 
+    @property
+    def meta_path(self) -> Path:
+        assert self.cassette_dir is not None
+        return self.cassette_dir / "meta.json"
+
+    def write_meta(self, meta: dict[str, Any]) -> None:
+        """Identify the run a cassette came from.
+
+        Replay has to reconstruct the same URLs the recording contains, and
+        those URLs embed the repo and the Devin organisation id. Without this,
+        replay would build URLs for a placeholder org and miss every key.
+        """
+        if self.mode != RECORD:
+            return
+        self.meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n")
+
     def flush(self) -> None:
         if self.mode != RECORD:
             return
@@ -172,6 +188,12 @@ class Transport:
         responses = entry["responses"]
         item = responses[min(seq, len(responses) - 1)]
         return Response(item["status"], item.get("body"), {})
+
+
+def read_meta(cassette_dir: str) -> dict[str, Any]:
+    """The repo/org a cassette was recorded against, if it declares them."""
+    p = Path(cassette_dir) / "meta.json"
+    return json.loads(p.read_text()) if p.exists() else {}
 
 
 def transport_from_env() -> Transport:

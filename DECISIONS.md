@@ -150,6 +150,41 @@ network or to a default. Fixtures are recordings of real runs, they are labelled
 as such, and replay never invents data. Tokens are redacted before anything is
 written to a cassette, and no `Authorization` header is recorded at all.
 
+## What the live run broke
+
+Every item here was found by running the swarm against the fork for real, and
+each one is a class of bug that only appears once observed reality disagrees
+with the design.
+
+- **The reviewer's verdict is not in the review API.** `GET /pr-reviews`
+  reported `completed` with no verdict field; the findings are the PR review and
+  inline comments the reviewer posts on GitHub. Reading the verdict from where
+  it is published turned every task from "review pending" into a decision.
+- **Overlapping writers reverted each other.** Dispatch jobs racing the
+  reconciler on `state.json` lost updates, because the loser of the
+  compare-and-swap re-applied its whole stale ledger. It now overlays only the
+  tasks it changed onto freshly-read state.
+- **A missing policy file was silently an empty policy.** In an Actions
+  container the working directory is the workspace, not the image, so the
+  relative `policy.yaml` did not exist — and an empty policy has no tiers, so
+  every class "matched no tier" and every mergeable PR was parked for a human.
+  The swarm looked conservative; it was misconfigured. A missing policy is now
+  an error, with the image's own copy as the only fallback.
+- **A parked task stopped watching its PR.** `needs_human` hands the PR to a
+  person; when that person merged it, the ledger went on reporting it unmerged.
+  Parked tasks keep observing PR state, and `merged_by` distinguishes a merge
+  the policy performed from one a human performed — a human merge is a landed
+  change, not autonomy, and the dashboard says so.
+- **A suspended session held its files hostage.** The reconciler resolved `exit`
+  and `error` sessions but not `suspended` ones, so a task whose session went
+  idle sat in `dispatched` forever and starved every task sharing its touch
+  scope. Two dependency issues were skipped as "conflicting" for hours because
+  of it.
+- **A stale fixture replayed green.** The recorded run predated the reviewer
+  change, so the documented stranger path emitted `ReplayMiss` for every review
+  request — and still exited 0, because the loop deliberately swallows per-task
+  errors. Replay now fails on any uncovered request, and CI runs it.
+
 ## Rejected alternatives
 
 - **A long-running dispatcher service.** Would need hosting, monitoring and a

@@ -59,6 +59,8 @@ class Task:
     pr_url: str | None = None
     pr_number: int | None = None
     pr_state: str | None = None
+    #: "swarm" when the merge policy merged it, "human" when someone else did
+    merged_by: str | None = None
     ci_status: str | None = None
     review_status: str | None = None
     structured_output: dict[str, Any] | None = None

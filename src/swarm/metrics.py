@@ -46,7 +46,9 @@ def compute(ledger: Ledger) -> dict[str, Any]:
     # PRs the swarm opened, what fraction landed without a human being pulled in?
     # Counting a failed task as "autonomous" because nobody was asked would
     # flatter the number.
-    autonomous = [t for t in merged if not t.ever_waited_for_user]
+    # A PR a person merged is a landed change, but it is not autonomy.
+    autonomous = [t for t in merged if t.merged_by != "human" and not t.ever_waited_for_user]
+    merged_by_human = [t for t in merged if t.merged_by == "human"]
 
     by_class: dict[str, dict[str, Any]] = {}
     for t in tasks:
@@ -71,6 +73,8 @@ def compute(ledger: Ledger) -> dict[str, Any]:
             "dispatched": len(dispatched),
             "prs_opened": len(with_pr),
             "merged": len(merged),
+            "merged_autonomously": len(autonomous),
+            "merged_by_human": len(merged_by_human),
             "needs_human": len([t for t in tasks if t.state == NEEDS_HUMAN]),
             "failed": len([t for t in tasks if t.state == FAILED]),
             "abandoned": len([t for t in tasks if t.state == ABANDONED]),
@@ -109,7 +113,8 @@ def step_summary(ledger: Ledger, log: list[str], title: str = "Swarm reconcile")
         f"## {title}",
         "",
         f"**{c['tasks']}** tasks · **{c['in_flight']}** in flight · **{c['prs_opened']}** PRs · "
-        f"**{c['merged']}** merged · **{c['needs_human']}** need a human · "
+        f"**{c['merged']}** merged ({c['merged_autonomously']} autonomously, "
+        f"{c['merged_by_human']} by a human) · **{c['needs_human']}** need a human · "
         f"**{m['acus_total']}** ACUs spent",
         "",
         "| Issue | Class | State | PR | CI | Review | ACUs |",

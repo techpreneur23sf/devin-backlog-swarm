@@ -20,7 +20,7 @@ from .dispatch import dispatch_issue
 from .gh import GitHubClient
 from .issues import IssueSpec, render_issue_body
 from .metrics import compute, step_summary
-from .models import QUEUED, Ledger, Task
+from .models import NEEDS_HUMAN, QUEUED, REVIEW_PENDING, Ledger, Task
 from .policy import Policy
 from .reconcile import reconcile
 from .scan import existing_fingerprints, file_issues, run_scanners
@@ -297,6 +297,19 @@ def cmd_state(args: argparse.Namespace) -> int:
         print(json.dumps(store.load().to_dict(), indent=2))
     elif args.action == "metrics":
         print(json.dumps(compute(store.load()), indent=2))
+    elif args.action == "unpark":
+        # A task parked for a reason that no longer holds (a policy defect, a
+        # since-corrected issue) needs an explicit operator decision to be
+        # re-observed; the reconciler will not un-park anything on its own.
+        ledger = store.load()
+        task = ledger.get(args.issue or 0)
+        if task is None or task.state != NEEDS_HUMAN:
+            print(f"#{args.issue}: not a parked task ({task.state if task else 'unknown'})")
+            return 1
+        target = REVIEW_PENDING if task.pr_url else QUEUED
+        task.transition(target, f"unparked by an operator: {args.reason or 'no reason given'}")
+        store.save(ledger, f"chore(swarm): unpark #{args.issue}")
+        print(f"#{args.issue}: {NEEDS_HUMAN} -> {target}")
     elif args.action == "rebuild":
         owner, name = gh.repo.split("/", 1)
         ledger = rebuild(gh, devin, repo_tag=f"repo:{owner}-{name}")
@@ -434,7 +447,9 @@ def build_parser() -> argparse.ArgumentParser:
     da.set_defaults(func=cmd_dashboard)
 
     st = sub.add_parser("state", help="inspect or rebuild the ledger")
-    st.add_argument("action", choices=["show", "metrics", "rebuild"])
+    st.add_argument("action", choices=["show", "metrics", "rebuild", "unpark"])
+    st.add_argument("--issue", type=int, help="issue number to unpark")
+    st.add_argument("--reason", default="", help="why the parked task is being re-observed")
     st.add_argument("--write", action="store_true", help="write the rebuilt ledger back to the state branch")
     st.set_defaults(func=cmd_state)
 

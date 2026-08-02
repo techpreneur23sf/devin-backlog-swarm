@@ -105,6 +105,12 @@ class GitHubClient:
     def get_pr(self, number: int) -> dict[str, Any]:
         return self._req("GET", f"/repos/{self.repo}/pulls/{number}")
 
+    def list_pr_reviews(self, number: int) -> list[dict[str, Any]]:
+        return self._paginate(f"/repos/{self.repo}/pulls/{number}/reviews")
+
+    def list_pr_review_comments(self, number: int) -> list[dict[str, Any]]:
+        return self._paginate(f"/repos/{self.repo}/pulls/{number}/comments")
+
     def list_pr_files(self, number: int) -> list[dict[str, Any]]:
         return self._paginate(f"/repos/{self.repo}/pulls/{number}/files")
 

@@ -26,7 +26,7 @@ from .reconcile import reconcile
 from .scan import existing_fingerprints, file_issues, run_scanners
 from .scheduler import plan
 from .state import STATE_BRANCH, StateStore, rebuild
-from .transport import LIVE, RECORD, REPLAY, Transport
+from .transport import LIVE, RECORD, REPLAY, Transport, read_meta
 from .verify import run as verify_pr
 from .verify import summary as verify_summary
 
@@ -65,6 +65,7 @@ def _clients(args: argparse.Namespace):
     devin = DevinClient(transport=t)
     policy = Policy.load(args.policy)
     store = StateStore(gh, branch=args.state_branch)
+    t.write_meta({"repo": gh.repo, "org_id": devin.org_id, "command": args.command, "run_id": args.run_id})
     return gh, devin, policy, store, t
 
 
@@ -180,8 +181,12 @@ def cmd_seed(args: argparse.Namespace) -> int:
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
-    """Run the linked issue's own verification commands as the PR's CI."""
-    gh, devin, policy, store, _ = _clients(args)
+    """Run the linked issue's own verification commands as the PR's CI.
+
+    Deliberately GitHub-only: verification runs on every PR in the target repo,
+    including ones a human wrote, and should not require a Devin credential.
+    """
+    gh = GitHubClient(repo=args.repo, transport=_transport(args))
     ok, steps, spec = verify_pr(gh, args.pr, repo_dir=args.repo_dir)
     _emit_summary(verify_summary(args.pr, ok, steps, spec))
     if args.post_status:
@@ -339,18 +344,20 @@ def cmd_digest(args: argparse.Namespace) -> int:
 
 def cmd_replay(args: argparse.Namespace) -> int:
     """Walk a recorded run end to end with no credentials. Nothing is invented."""
-    os.environ.setdefault("SWARM_REPO", "techpreneur23sf/apache-superset")
-    os.environ.setdefault("GITHUB_TOKEN", "replay")
-    os.environ.setdefault("DEVIN_API_KEY", "replay")
-    os.environ.setdefault("DEVIN_ORG_ID", "replay")
-    t = Transport(mode=REPLAY, cassette_dir=args.fixtures)
-    gh = GitHubClient(repo=os.environ["SWARM_REPO"], token="replay", transport=t)
-    devin = DevinClient(api_key="replay", org_id="replay", transport=t)
+    # `--replay <dir>` (the global flag every other command takes) and
+    # `--fixtures <dir>` both name the same recording.
+    fixtures = args.replay or args.fixtures
+    meta = read_meta(fixtures)
+    t = Transport(mode=REPLAY, cassette_dir=fixtures)
+    # The recorded URLs embed the repo and org the run used, so replay has to
+    # address the same ones; the credentials are placeholders and never sent.
+    gh = GitHubClient(repo=meta.get("repo", args.repo or "owner/repo"), token="replay", transport=t)
+    devin = DevinClient(api_key="replay", org_id=meta.get("org_id", "replay"), transport=t)
     policy = Policy.load(args.policy)
     store = StateStore(gh, branch=args.state_branch)
 
     banner = "═" * 78
-    print(f"{banner}\n  REPLAY MODE — recorded responses from a real run in {args.fixtures}\n"
+    print(f"{banner}\n  REPLAY MODE — recorded responses from a real run in {fixtures}\n"
           f"  No network calls are made. No data is synthesised.\n{banner}\n")
     ledger = store.load()
     for tick in range(1, args.ticks + 1):
@@ -436,7 +443,9 @@ def build_parser() -> argparse.ArgumentParser:
     dg.set_defaults(func=cmd_digest)
 
     rp = sub.add_parser("replay", help="replay a recorded run offline, with no credentials")
-    rp.add_argument("--fixtures", default="fixtures/latest")
+    rp.add_argument("--fixtures", default="fixtures/latest", help="the recorded run to walk (same as --replay)")
+    # accepted after the subcommand too, so `swarm replay --replay fixtures/run-…` works
+    rp.add_argument("--replay", default=None, help=argparse.SUPPRESS)
     rp.add_argument("--ticks", type=int, default=6)
     rp.add_argument("--out", default="")
     rp.set_defaults(func=cmd_replay)

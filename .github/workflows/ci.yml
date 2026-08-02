@@ -23,4 +23,4 @@ jobs:
         env:
           DEVIN_API_KEY: ""
           GITHUB_TOKEN: ""
-        run: swarm replay --dir fixtures/$(ls fixtures | head -1)
+        run: swarm replay --replay "fixtures/$(ls fixtures | head -1)"

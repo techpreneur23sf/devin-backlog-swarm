@@ -184,6 +184,18 @@ def cmd_verify(args: argparse.Namespace) -> int:
     gh, devin, policy, store, _ = _clients(args)
     ok, steps, spec = verify_pr(gh, args.pr, repo_dir=args.repo_dir)
     _emit_summary(verify_summary(args.pr, ok, steps, spec))
+    if args.post_status:
+        # A commit status, not just a job result: the reconciler reads CI from
+        # the statuses API, and a run triggered manually would otherwise leave
+        # no trace the merge policy can see.
+        sha = gh.get_pr(args.pr)["head"]["sha"]
+        gh.set_status(
+            sha,
+            "success" if ok else "failure",
+            "swarm verify",
+            f"{sum(s.ok for s in steps)}/{len(steps)} checks from the linked issue",
+            target_url=args.status_url or None,
+        )
     return 0 if ok else 1
 
 
@@ -389,6 +401,8 @@ def build_parser() -> argparse.ArgumentParser:
     vf = sub.add_parser("verify", help="run a PR's linked issue verification commands (the fork's CI)")
     vf.add_argument("--pr", type=int, required=True)
     vf.add_argument("--repo-dir", default=".")
+    vf.add_argument("--post-status", action="store_true", help="publish a `swarm verify` commit status")
+    vf.add_argument("--status-url", default=os.environ.get("SWARM_STATUS_URL", ""))
     vf.set_defaults(func=cmd_verify)
 
     di = sub.add_parser("dispatch", help="create a Devin session for one or more issues")

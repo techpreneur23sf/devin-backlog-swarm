@@ -111,6 +111,12 @@ class GitHubClient:
     def combined_status(self, sha: str) -> dict[str, Any]:
         return self._req("GET", f"/repos/{self.repo}/commits/{sha}/status")
 
+    def set_status(self, sha: str, state: str, context: str, description: str, target_url: str | None = None) -> dict[str, Any]:
+        body: dict[str, Any] = {"state": state, "context": context, "description": description[:139]}
+        if target_url:
+            body["target_url"] = target_url
+        return self._req("POST", f"/repos/{self.repo}/statuses/{sha}", body)
+
     def check_runs(self, sha: str) -> dict[str, Any]:
         return self._req("GET", f"/repos/{self.repo}/commits/{sha}/check-runs", allow_status=(404,))
 

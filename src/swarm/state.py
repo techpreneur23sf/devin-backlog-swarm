@@ -12,6 +12,7 @@ should be a command, not a shrug.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -46,6 +47,7 @@ class StateStore:
         self.gh = gh
         self.branch = branch
         self._sha: str | None = None
+        self._snapshot: dict[str, Any] = {}
 
     def ensure_branch(self) -> None:
         self.gh.create_orphan_branch(self.branch, _BRANCH_README)
@@ -54,12 +56,13 @@ class StateStore:
         f = self.gh.get_file(STATE_PATH, self.branch)
         if not f:
             self._sha = None
+            self._snapshot = {}
             return Ledger(repo=self.gh.repo)
         self._sha = f["sha"]
-        import base64
-
         data = json.loads(base64.b64decode(f["content"]).decode())
-        return Ledger.from_dict(data)
+        ledger = Ledger.from_dict(data)
+        self._snapshot = {k: json.dumps(t.to_dict(), sort_keys=True) for k, t in ledger.tasks.items()}
+        return ledger
 
     def save(self, ledger: Ledger, message: str = "chore(swarm): update ledger") -> None:
         """Compare-and-swap write; on conflict re-read, re-apply, retry."""
@@ -69,11 +72,19 @@ class StateStore:
             if isinstance(res, dict) and res.get("content"):
                 self._sha = res["content"]["sha"]
                 return
-            # 409/422: someone else wrote first. Merge our tasks over theirs.
+            # 409/422: someone else wrote first. Overlay only the tasks *this*
+            # process actually changed — copying the whole in-memory ledger
+            # would silently revert the winner's work on every other task,
+            # which is exactly the lost update CAS is supposed to prevent.
+            mine = {
+                key: task
+                for key, task in ledger.tasks.items()
+                if json.dumps(task.to_dict(), sort_keys=True) != self._snapshot.get(key)
+            }
+            runs = dict(ledger.runs)
             fresh = self.load()
-            for key, task in ledger.tasks.items():
-                fresh.tasks[key] = task
-            fresh.runs.update(ledger.runs)
+            fresh.tasks.update(mine)
+            fresh.runs.update(runs)
             ledger = fresh
             content = json.dumps(ledger.to_dict(), indent=2, sort_keys=True) + "\n"
         raise RuntimeError("could not write ledger after 5 attempts (persistent write conflict)")

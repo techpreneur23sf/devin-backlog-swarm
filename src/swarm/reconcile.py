@@ -246,15 +246,21 @@ def _reconcile_task(
                 log.append(f"#{task.issue_number}: failed (no PR)")
 
     # 4. PR lifecycle ----------------------------------------------------------
-    if task.pr_url and task.pr_number and task.state in (PR_OPEN, REVIEW_PENDING, REVIEW_CLEAN):
+    # `needs_human` is included deliberately: parking a task hands the PR to a
+    # person, and when that person merges or closes it, GitHub — not the ledger
+    # — is the authority on what happened to it.
+    if task.pr_url and task.pr_number and task.state in (PR_OPEN, REVIEW_PENDING, REVIEW_CLEAN, NEEDS_HUMAN):
         pr = gh.get_pr(task.pr_number)
         task.pr_state = "merged" if pr.get("merged") else pr.get("state")
         if pr.get("merged"):
-            if task.transition(MERGED, "pull request merged"):
-                log.append(f"#{task.issue_number}: merged {task.pr_url}")
+            task.merged_by = task.merged_by or "human"
+            if task.transition(MERGED, f"pull request merged by a {task.merged_by}"):
+                log.append(f"#{task.issue_number}: merged {task.pr_url} (by a {task.merged_by})")
         elif pr.get("state") == "closed":
             if task.transition(ABANDONED, "pull request closed without merging"):
                 log.append(f"#{task.issue_number}: abandoned (PR closed)")
+        elif task.state == NEEDS_HUMAN:
+            pass  # a parked task is observed, not advanced
         else:
             task.ci_status = ci_status_for(gh, pr)
             if task.state == PR_OPEN:
@@ -287,6 +293,7 @@ def _reconcile_task(
                             task.last_error = "merge call did not take effect"
                     if dry_run or gh.get_pr(task.pr_number).get("merged"):
                         task.pr_state = "merged"
+                        task.merged_by = "swarm"
                         if task.transition(MERGED, decision.reason):
                             log.append(f"#{task.issue_number}: merged automatically ({decision.reason})")
                             if not dry_run:

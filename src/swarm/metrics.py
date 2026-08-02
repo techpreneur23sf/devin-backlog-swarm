@@ -50,7 +50,7 @@ def compute(ledger: Ledger) -> dict[str, Any]:
     # is a landed change, but it is not autonomy.
     merged_by_swarm = [t for t in merged if t.merged_by == "swarm"]
     merged_by_human = [t for t in merged if t.merged_by == "human"]
-    autonomous = [t for t in merged_by_swarm if not t.ever_waited_for_user]
+    autonomous = [t for t in merged_by_swarm if not t.needed_a_human]
 
     by_class: dict[str, dict[str, Any]] = {}
     for t in tasks:

@@ -98,3 +98,13 @@ def test_a_suspended_session_with_no_pr_does_not_hold_its_touch_scope_forever():
     reconcile(FakeGH({}), Suspended(), ledger, POLICY, dry_run=True)
     assert task.state == "failed"
     assert task not in ledger.in_flight()
+
+
+def test_an_idle_session_is_not_human_involvement():
+    """A finished session sits in waiting_for_user because nobody is talking to it."""
+    landed = Task(issue_number=20, state=MERGED, merged_by="swarm", ever_waited_for_user=True)
+    assert not landed.needed_a_human
+
+    parked_then_merged = Task(issue_number=21, state=MERGED, merged_by="swarm")
+    parked_then_merged.history = [{"at": 1, "from": "pr_open", "to": NEEDS_HUMAN, "reason": "review findings"}]
+    assert parked_then_merged.needed_a_human

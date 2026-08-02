@@ -95,6 +95,17 @@ class Task:
     def is_terminal(self) -> bool:
         return self.state in TERMINAL_STATES
 
+    @property
+    def needed_a_human(self) -> bool:
+        """Was a person actually pulled into this task?
+
+        Not the same as `ever_waited_for_user`: a session that finishes its work
+        sits in `waiting_for_user` because nobody is talking to it, which says
+        nothing about whether anyone had to. A person was pulled in when the
+        task was parked for one (`needs_human`) or when one merged the PR.
+        """
+        return self.merged_by == "human" or any(h.get("to") == NEEDS_HUMAN for h in self.history)
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 

@@ -378,7 +378,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="swarm", description="Autonomous backlog swarm for Devin")
     p.add_argument("--version", action="version", version=__version__)
     p.add_argument("--repo", default=os.environ.get("SWARM_REPO", ""), help="owner/name of the target repo")
-    p.add_argument("--policy", default=os.environ.get("SWARM_POLICY", "policy.yaml"))
+    p.add_argument("--policy", default=os.environ.get("SWARM_POLICY"))
     p.add_argument("--state-branch", default=STATE_BRANCH)
     p.add_argument("--run-id", default=os.environ.get("GITHUB_RUN_ID"))
     p.add_argument("--record", help="record all HTTP traffic into this fixture directory")

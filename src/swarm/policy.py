@@ -19,6 +19,8 @@ from typing import Any
 import yaml
 
 DEFAULT_POLICY_PATH = os.environ.get("SWARM_POLICY", "policy.yaml")
+#: shipped in the image, so a container run outside the source tree still has one
+BUNDLED_POLICY_PATH = "/app/policy.yaml"
 
 
 @dataclass
@@ -54,7 +56,16 @@ class Policy:
     @classmethod
     def load(cls, path: str | None = None) -> Policy:
         p = Path(path or DEFAULT_POLICY_PATH)
-        data = yaml.safe_load(p.read_text()) or {} if p.exists() else {}
+        # A missing policy file used to degrade to an empty policy, which reads
+        # as "no tier matches this class" and quietly routes every mergeable PR
+        # to a human. Refusing to run is the honest failure.
+        if not p.exists():
+            bundled = Path(BUNDLED_POLICY_PATH)
+            if path is None and bundled.exists():
+                p = bundled
+            else:
+                raise FileNotFoundError(f"policy file not found: {p}")
+        data = yaml.safe_load(p.read_text()) or {}
         budget = Budget(**{k: v for k, v in (data.get("budget") or {}).items() if k in Budget.__annotations__})
         # Env overrides exist so an operator can throttle or stop the swarm from
         # the Actions UI without a commit — the kill switch has to be reachable

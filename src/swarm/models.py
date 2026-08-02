@@ -101,7 +101,29 @@ class Task:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Task:
         known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
-        return cls(**{k: v for k, v in data.items() if k in known})
+        task = cls(**{k: v for k, v in data.items() if k in known})
+        if task.state == MERGED and task.merged_by is None:
+            task.merged_by = _merge_actor_from_history(task.history)
+        return task
+
+
+def _merge_actor_from_history(history: list[dict[str, Any]]) -> str | None:
+    """Who merged a task recorded before `merged_by` existed.
+
+    Read from the transition the reconciler wrote at the time, so the answer is
+    still evidence rather than an assumption; entries that say neither stay
+    unknown and are counted as neither.
+    """
+    for entry in reversed(history):
+        if entry.get("to") != MERGED:
+            continue
+        reason = (entry.get("reason") or "").lower()
+        if "human" in reason:
+            return "human"
+        if reason.startswith("satisfies tier"):
+            return "swarm"
+        return None
+    return None
 
 
 @dataclass

@@ -1,6 +1,14 @@
+import pytest
+
 from swarm.policy import Policy, evaluate_merge
 
 POLICY = Policy.load("policy.yaml")
+
+
+def test_missing_policy_file_is_an_error_not_an_empty_policy(tmp_path):
+    """An empty policy silently routes every auto-mergeable PR to a human."""
+    with pytest.raises(FileNotFoundError):
+        Policy.load(str(tmp_path / "nope.yaml"))
 
 
 def _args(**over):

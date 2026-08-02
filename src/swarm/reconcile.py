@@ -240,10 +240,13 @@ def _reconcile_task(
                 log.append(f"#{task.issue_number}: {target} ({task.failure_category})")
                 if not dry_run:
                     gh.comment(task.issue_number, _outcome_comment(task, target.replace("_", " ")))
-        elif task.session_status == "exit":
+        elif task.session_status in ("exit", "suspended"):
+            # A suspended session is over as far as the swarm is concerned. Left
+            # in `dispatched` it holds its touch scope forever, and every other
+            # task that shares those files is skipped as conflicting.
             task.failure_category = FAILURE_NO_PR
-            if task.transition(FAILED, "session exited without a pull request"):
-                log.append(f"#{task.issue_number}: failed (no PR)")
+            if task.transition(FAILED, f"session ended ({task.session_status}) without a pull request"):
+                log.append(f"#{task.issue_number}: failed (no PR, session {task.session_status})")
 
     # 4. PR lifecycle ----------------------------------------------------------
     # `needs_human` is included deliberately: parking a task hands the PR to a

@@ -63,7 +63,7 @@ def test_a_human_merge_does_not_count_towards_autonomy():
     reconcile(FakeGH({"merged": True, "state": "closed", "head": {"sha": "abc"}}), FakeDevin(), ledger, POLICY, dry_run=True)
     counts = compute(ledger)["counts"]
     assert counts["merged"] == 1
-    assert counts["merged_autonomously"] == 0
+    assert counts["merged_by_swarm"] == 0
     assert counts["merged_by_human"] == 1
 
 
@@ -71,3 +71,30 @@ def test_a_parked_pr_that_is_still_open_stays_parked():
     task = _parked_task()
     reconcile(FakeGH({"merged": False, "state": "open", "head": {"sha": "abc"}}), FakeDevin(), _ledger(task), POLICY, dry_run=True)
     assert task.state == NEEDS_HUMAN
+
+
+def test_merge_actor_is_recovered_from_history_for_older_entries():
+    """Ledgers written before `merged_by` existed still recorded who merged."""
+    older = {
+        "issue_number": 13,
+        "state": MERGED,
+        "history": [{"at": 1, "from": "review_clean", "to": MERGED, "reason": "satisfies tier 'auto_merge'"}],
+    }
+    assert Task.from_dict(older).merged_by == "swarm"
+    human = dict(older, history=[{"at": 1, "from": "needs_human", "to": MERGED, "reason": "pull request merged by a human"}])
+    assert Task.from_dict(human).merged_by == "human"
+    unknown = dict(older, history=[{"at": 1, "from": "pr_open", "to": MERGED, "reason": "pull request merged"}])
+    assert Task.from_dict(unknown).merged_by is None
+
+
+def test_a_suspended_session_with_no_pr_does_not_hold_its_touch_scope_forever():
+    task = Task(issue_number=11, issue_class="dep-bump-patch", state="dispatched", session_id="s11")
+    ledger = _ledger(task)
+
+    class Suspended(FakeDevin):
+        def get_session(self, sid):
+            return {"status": "suspended", "status_detail": "inactivity"}
+
+    reconcile(FakeGH({}), Suspended(), ledger, POLICY, dry_run=True)
+    assert task.state == "failed"
+    assert task not in ledger.in_flight()

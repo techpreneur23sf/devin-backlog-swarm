@@ -48,8 +48,8 @@ def test_in_flight_is_sessions_and_active_is_everything_still_moving():
 
 def test_metrics_report_autonomy_and_merge_rate_from_observed_state():
     led = Ledger(repo="o/r")
-    led.upsert(Task(issue_number=1, state=MERGED, issue_class="dep-bump-patch", pr_number=1, session_id="s1", pr_url="u1", acus_consumed=3.0))
-    led.upsert(Task(issue_number=2, state=MERGED, issue_class="deprecation", pr_number=2, session_id="s2", pr_url="u2", acus_consumed=5.0))
+    led.upsert(Task(issue_number=1, state=MERGED, issue_class="dep-bump-patch", pr_number=1, session_id="s1", pr_url="u1", merged_by="swarm", acus_consumed=3.0))
+    led.upsert(Task(issue_number=2, state=MERGED, issue_class="deprecation", pr_number=2, session_id="s2", pr_url="u2", merged_by="swarm", acus_consumed=5.0))
     led.upsert(Task(issue_number=3, state=NEEDS_HUMAN, issue_class="security", pr_number=3, session_id="s3", pr_url="u3", ever_waited_for_user=True, acus_consumed=2.0))
     led.upsert(Task(issue_number=4, state=FAILED, issue_class="dep-bump-major", session_id="s4", failure_category="verification"))
 

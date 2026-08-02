@@ -104,7 +104,29 @@ def ci_status_for(gh: GitHubClient, pr: dict[str, Any]) -> str:
     return "green"
 
 
-def review_status_for(devin: DevinClient, pr_url: str) -> tuple[str, dict[str, Any] | None]:
+#: Devin Review posts its verdict as a PR review from this account.
+REVIEWER_LOGIN = "devin-ai-integration[bot]"
+
+
+def review_findings(gh: GitHubClient, pr_number: int) -> tuple[int, str]:
+    """How many findings the reviewer raised, and the summary it posted.
+
+    The Devin Review API reports *whether* a review ran; the findings
+    themselves are the review it left on the PR, so the verdict is read from
+    GitHub. Inline comments are the countable signal — the summary body is kept
+    only so a human sees why a task stopped.
+    """
+    body = ""
+    for review in gh.list_pr_reviews(pr_number):
+        if (review.get("user") or {}).get("login") == REVIEWER_LOGIN:
+            body = review.get("body") or body
+    findings = sum(1 for c in gh.list_pr_review_comments(pr_number) if (c.get("user") or {}).get("login") == REVIEWER_LOGIN)
+    return findings, body
+
+
+def review_status_for(
+    devin: DevinClient, pr_url: str, gh: GitHubClient | None = None, pr_number: int | None = None
+) -> tuple[str, dict[str, Any] | None]:
     """clean / comments / blocking / pending, from the Devin Review API."""
     try:
         data = devin.get_pr_review(pr_url) or {}
@@ -125,6 +147,12 @@ def review_status_for(devin: DevinClient, pr_url: str) -> tuple[str, dict[str, A
     comment_count = review.get("comment_count")
     if isinstance(comment_count, int):
         return ("clean" if comment_count == 0 else "comments"), review
+    if status == "completed" and gh is not None and pr_number is not None:
+        # The API says the review finished but carries no verdict field, so
+        # read the verdict where the reviewer actually published it.
+        findings, body = review_findings(gh, pr_number)
+        review = {**review, "findings": findings, "summary": body[:400]}
+        return ("clean" if findings == 0 else "comments"), review
     return "pending", review
 
 
@@ -235,13 +263,15 @@ def _reconcile_task(
                 if task.transition(REVIEW_PENDING, "Devin Review requested"):
                     log.append(f"#{task.issue_number}: review_pending")
             if task.state in (REVIEW_PENDING, REVIEW_CLEAN):
-                task.review_status, _ = review_status_for(devin, task.pr_url)
+                task.review_status, review = review_status_for(devin, task.pr_url, gh, task.pr_number)
                 if task.review_status == "clean" and task.state == REVIEW_PENDING:
                     if task.transition(REVIEW_CLEAN, "review clean"):
                         log.append(f"#{task.issue_number}: review_clean")
-                elif task.review_status == "blocking":
-                    if task.transition(NEEDS_HUMAN, "Devin Review raised blocking findings"):
-                        log.append(f"#{task.issue_number}: needs_human (blocking review)")
+                elif task.review_status in ("blocking", "comments"):
+                    found = (review or {}).get("findings")
+                    reason = f"Devin Review raised {found} finding(s)" if found else "Devin Review raised blocking findings"
+                    if task.transition(NEEDS_HUMAN, reason):
+                        log.append(f"#{task.issue_number}: needs_human ({reason})")
 
             # 5. Merge decision ------------------------------------------------
             if task.state == REVIEW_CLEAN and task.ci_status == "green":

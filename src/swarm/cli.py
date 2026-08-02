@@ -383,6 +383,16 @@ def cmd_replay(args: argparse.Namespace) -> int:
         os.makedirs(args.out, exist_ok=True)
         open(os.path.join(args.out, "index.html"), "w").write(render(ledger, gh.repo, {"run_id": "replay"}))
         print(f"dashboard written to {args.out}/index.html (rendered from recorded data)")
+    if t.misses:
+        # Per-task errors do not stall the loop, so a fixture that no longer
+        # covers what the code asks for would otherwise replay "successfully"
+        # while quietly demonstrating nothing.
+        unique = sorted(set(t.misses))
+        print(f"\n{len(unique)} request(s) this fixture does not cover — it was recorded against older code:")
+        for miss in unique[:10]:
+            print(f"   {miss}")
+        print("\nRe-record it against a real run: swarm --record fixtures/run-<date> reconcile --dry-run")
+        return 1
     return 0
 
 

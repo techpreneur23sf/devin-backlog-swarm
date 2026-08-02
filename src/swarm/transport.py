@@ -85,6 +85,9 @@ class Transport:
         self._cassette: dict[str, Any] = {}
         self._counts: dict[str, int] = {}
         self.calls: list = []
+        #: replay requests the cassette did not contain — a fixture recorded
+        #: against older code no longer describes what the code now asks for
+        self.misses: list[str] = []
         if self.mode in (RECORD, REPLAY):
             if not self.cassette_dir:
                 raise ValueError(f"{self.mode} mode requires a cassette directory")
@@ -181,6 +184,7 @@ class Transport:
     def _replay(self, key: str, seq: int, method: str, url: str) -> Response:
         entry = self._cassette.get(key)
         if not entry:
+            self.misses.append(f"{method.upper()} {url}")
             raise ReplayMiss(
                 f"no recorded response for {method.upper()} {url} (key {key}). "
                 "Fixtures are recordings of real runs; replay never invents data."

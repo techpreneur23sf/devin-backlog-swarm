@@ -68,3 +68,25 @@ def test_metrics_on_an_empty_ledger_are_not_invented():
     m = compute(Ledger(repo="o/r"))
     assert m["acus_per_merged_pr"] is None
     assert m["median_issue_to_pr_hours"] is None
+
+
+def test_an_unmetered_account_reports_no_cost_rather_than_a_free_one():
+    """`acus_consumed` is 0.0 on plans Devin does not meter in ACUs.
+
+    Dividing that by the merges would advertise shipped work as free.
+    """
+    led = Ledger(repo="o/r")
+    t = Task(issue_number=1, state=MERGED, issue_class="dep-bump-patch", pr_number=1,
+             session_id="s1", pr_url="u1", merged_by="swarm", acus_consumed=0.0)
+    t.dispatched_at, t.terminal_at = 1_000_000, 1_000_000 + 3600
+    t.session_size, t.devin_messages = "xs", 2
+    led.upsert(t)
+
+    m = compute(led)
+    assert m["acus_metered"] is False
+    assert m["acus_per_merged_pr"] is None
+    assert m["acus_on_merged_tasks"] is None
+    # the effort signals the API does return on any plan
+    assert m["effort"]["session_sizes"] == {"xs": 1}
+    assert m["effort"]["devin_messages_total"] == 2
+    assert m["effort"]["median_session_hours"] == 1.0

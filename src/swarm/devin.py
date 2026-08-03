@@ -9,6 +9,7 @@ user on 2026-08-01 (see DECISIONS.md, D-001):
     GET  /v3/organizations/{org}/sessions/{id}       reconcile
     POST /v3/organizations/{org}/sessions/{id}/messages
     POST /v3/organizations/{org}/sessions/{id}/terminate
+    GET  /v3/organizations/{org}/sessions/{id}/insights  effort (size, messages)
     GET  /v3/organizations/{org}/consumption/daily   ACU budget
     POST /v3/organizations/{org}/pr-reviews          Devin Review
     GET  /v3/organizations/{org}/pr-reviews?pr_url=  Devin Review verdict
@@ -141,6 +142,19 @@ class DevinClient:
     def terminate(self, session_id: str) -> Any:
         return self._post(f"/sessions/{session_id}/terminate", {}, allow_status=(404, 409))
 
+    def get_insights(self, session_id: str) -> dict[str, Any]:
+        """Per-session effort: size class, message counts, category.
+
+        The only usage signal the API reports on a plan that does not meter
+        ACUs. 404s while a session is too short to analyse.
+        """
+        return self.http.request(
+            "GET",
+            self._url(f"/sessions/{session_id}/insights"),
+            headers=self._headers,
+            allow_status=(404, 409, 425),
+        ).json() or {}
+
     def daily_consumption(self) -> dict[str, Any]:
         return self._get("/consumption/daily")
 
@@ -159,7 +173,13 @@ class DevinClient:
 
 
 def acus_today(client: DevinClient) -> float:
-    """ACUs consumed in the current billing day, straight from the API."""
+    """ACUs consumed in the current billing day, straight from the API.
+
+    Reports 0.0 on accounts Devin does not meter in ACUs (self-serve plans bill
+    included quota then on-demand credits, and neither is exposed per session).
+    A budget that only counts observed ACUs is therefore not a budget at all on
+    such a plan — see `reserved_acus_today`, which is what the scheduler spends.
+    """
     data = client.daily_consumption() or {}
     by_date = data.get("consumption_by_date") or []
     if by_date:

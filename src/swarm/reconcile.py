@@ -198,6 +198,14 @@ def _reconcile_task(
         task.acus_consumed = float(session.get("acus_consumed") or task.acus_consumed or 0)
         if session.get("structured_output"):
             task.structured_output = session["structured_output"]
+        # Effort, once, when the session is over. On a plan that does not meter
+        # ACUs the session API reports 0.0 for every session, so size class and
+        # message count are the only usage signals the API will give us.
+        if session.get("status") in ("suspended", "exit", "blocked") and not task.session_size:
+            insights = devin.get_insights(task.session_id) or {}
+            task.session_size = insights.get("session_size")
+            task.devin_messages = int(insights.get("num_devin_messages") or 0)
+            task.acus_consumed = float(insights.get("acus_consumed") or task.acus_consumed or 0)
 
     # 1. Session-derived state -------------------------------------------------
     if task.session_status_detail == "waiting_for_user":

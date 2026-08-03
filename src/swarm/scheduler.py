@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 
-from .models import Task
+from .models import Ledger, Task, now
 from .policy import Policy
 
 
@@ -38,6 +38,23 @@ def scopes_overlap(a: Sequence[str], b: Sequence[str]) -> bool:
             if pa == pb or pa.startswith(pb + "/") or pb.startswith(pa + "/"):
                 return True
     return False
+
+
+def reserved_acus_today(ledger: Ledger, policy: Policy, now_ts: int | None = None) -> float:
+    """What today's dispatches were allowed to spend, whether or not it is metered.
+
+    The daily cap has to hold on an account Devin does not meter in ACUs, where
+    `GET /consumption/daily` reports 0.0 forever: a cap compared against zero
+    never binds, and "unlimited" is the one budget nobody asked for. So each
+    dispatch reserves its class's per-session limit up front, and the scheduler
+    spends the larger of reserved and observed — reservations bound the blast
+    radius, observation corrects it downwards once a metered plan reports back.
+    """
+    midnight = ((now_ts or now()) // 86400) * 86400
+    return sum(
+        max(t.acus_consumed, float(policy.acu_limit(t.issue_class)))
+        for t in ledger.dispatched_since(midnight)
+    )
 
 
 def plan(

@@ -35,6 +35,9 @@ class FakeDevin:
     def get_session(self, sid):
         return {}
 
+    def get_insights(self, sid):
+        return {"session_size": "xs", "num_devin_messages": 2, "acus_consumed": 0.0}
+
 
 def _parked_task():
     t = Task(issue_number=5, issue_class="code-quality", state=NEEDS_HUMAN)

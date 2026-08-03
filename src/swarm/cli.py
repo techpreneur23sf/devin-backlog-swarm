@@ -24,7 +24,7 @@ from .models import NEEDS_HUMAN, QUEUED, REVIEW_PENDING, Ledger, Task
 from .policy import Policy
 from .reconcile import reconcile
 from .scan import existing_fingerprints, file_issues, run_scanners
-from .scheduler import plan
+from .scheduler import plan, reserved_acus_today
 from .state import STATE_BRANCH, StateStore, rebuild
 from .transport import LIVE, RECORD, REPLAY, Transport, read_meta
 from .verify import run as verify_pr
@@ -118,8 +118,13 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
-    gh, devin, policy, store, _ = _clients(args)
-    findings = run_scanners(args.repo_dir, tools=args.tools.split(","))
+    """Findings in, deduplicated issues out.
+
+    GitHub-only, like `verify`: intake files issues, it never talks to Devin, so
+    a scan cron must not fail for want of a Devin credential.
+    """
+    gh = GitHubClient(repo=args.repo, transport=_transport(args))
+    findings, tool_runs = run_scanners(args.repo_dir, tools=args.tools.split(","))
     created = file_issues(gh, findings, auto_label=args.auto_label, limit=args.limit, dry_run=args.dry_run)
     lines = [
         "## Swarm scan",
@@ -127,19 +132,32 @@ def cmd_scan(args: argparse.Namespace) -> int:
         f"{len(findings)} distinct package findings from `{args.tools}` · {len(created)} new issues "
         f"(the rest were already tracked — deduplication is on the finding fingerprint, not the title)",
         "",
+        "| Scanner | Status | Raw findings | Detail |",
+        "|---|---|---|---|",
     ]
+    for run in tool_runs:
+        lines.append(f"| `{run.tool}` | {run.status} | {run.findings or '—'} | {run.detail or '—'}|")
+    lines.append("")
     for issue in created:
         num = issue.get("number")
         lines.append(f"- {'#' + str(num) if num else '[dry-run]'} {issue.get('title')}")
     _emit_summary("\n".join(lines) + "\n")
+    # A scan where nothing ran is not a clean repository. Fail rather than
+    # report an empty backlog that nobody will question.
+    if tool_runs and not any(r.status == "ok" for r in tool_runs):
+        print("\nno scanner produced output — treating this as a failed scan, not a clean repository")
+        return 1
     return 0
 
 
 def cmd_seed(args: argparse.Namespace) -> int:
-    """File the hand-curated tier-2/tier-3 backlog from a YAML definition."""
+    """File the hand-curated tier-2/tier-3 backlog from a YAML definition.
+
+    GitHub-only for the same reason as `scan`: filing issues is intake.
+    """
     import yaml
 
-    gh, devin, policy, store, _ = _clients(args)
+    gh = GitHubClient(repo=args.repo, transport=_transport(args))
     spec = yaml.safe_load(open(args.file).read())
     setup = (spec.get("setup") or "").strip()
     known = existing_fingerprints(gh) if not args.dry_run else {}
@@ -232,11 +250,18 @@ def cmd_nightly(args: argparse.Namespace) -> int:
         task.issue_title, task.issue_class, task.touch_scope = spec.title, spec.issue_class, spec.touch_scope
         ledger.upsert(task)
 
-    spent = acus_today(devin)
+    observed = acus_today(devin)
+    reserved = reserved_acus_today(ledger, policy)
+    # A cap compared against an unmetered 0.0 never binds; spend the larger.
+    spent = max(observed, reserved)
     in_flight = ledger.in_flight()
     unmerged = [t for t in ledger.active() if t not in in_flight]
     to_dispatch, skipped = plan(ledger.queued(), in_flight, policy, spent, holding_scope=unmerged)
-    notes = [f"ACUs spent today: {spent:.1f} / cap {policy.budget.daily_acu_cap}"]
+    metered = "metered" if observed else "this plan does not meter ACUs"
+    notes = [
+        f"Budget today: {spent:.1f} / cap {policy.budget.daily_acu_cap} "
+        f"({reserved:.1f} reserved by dispatches, {observed:.1f} observed — {metered})"
+    ]
     for task in to_dispatch:
         _, note = dispatch_issue(
             gh, devin, ledger, policy, task.issue_number, run_id=args.run_id, base_branch=args.base, dry_run=args.dry_run

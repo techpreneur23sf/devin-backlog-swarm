@@ -87,13 +87,21 @@ SWARM_MAX_SESSIONS=2        # concurrency
 SWARM_DAILY_ACU_CAP=40      # spend
 ```
 
+The daily cap is enforced against `max(reserved, observed)`, where each dispatch
+reserves its class's per-session ACU limit. That is not belt-and-braces: Devin
+meters ACUs on Enterprise plans, and reports `acus_consumed: 0.0` on plans billed
+as quota plus on-demand credits — a cap compared against an unmetered zero would
+never bind. For the same reason the dashboard reports "not metered" rather than a
+cost per merged PR of 0.0, and falls back to the effort signals the API does
+return per session (`session_size`, Devin message counts, wall-clock time).
+
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `swarm doctor` | verifies every API capability the system assumes |
 | `swarm bootstrap` | labels, `swarm-state`, `gh-pages` |
-| `swarm scan` | OSS scanners → deduplicated issues (fingerprinted, never refiled) |
+| `swarm scan` | OSS scanners → deduplicated issues (fingerprinted, never refiled) — see [`docs/SCANS.md`](docs/SCANS.md) |
 | `swarm seed` | files the hand-curated backlog from `backlog/*.yaml` |
 | `swarm dispatch --issue N` | one session, non-blocking |
 | `swarm nightly` | conflict-aware fan-out under concurrency and ACU caps |
@@ -114,4 +122,7 @@ SWARM_DAILY_ACU_CAP=40      # spend
 ## Reading the design
 
 [`DECISIONS.md`](DECISIONS.md) has the verified Devin v3 capability table, the
-two honest caveats about it, and why the rejected alternatives were rejected.
+honest caveats about it, what the live run broke, and why the rejected
+alternatives were rejected. [`docs/SCANS.md`](docs/SCANS.md) covers intake: what
+each scanner actually inspects, how 40 advisory records collapse into 8 issues,
+and why the finding's *class* is what makes it dispatchable.

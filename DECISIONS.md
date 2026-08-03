@@ -22,16 +22,28 @@ the load-bearing ones on demand.
 | Request a review | `POST …/pr-reviews` | works | review gate |
 | Read a review verdict | `GET …/pr-reviews?pr_url=…` | works | review gate |
 | Daily consumption | `GET …/consumption/daily` | works, **reports 0.0** | budget enforcement (see below) |
+| Session insights | `GET …/sessions/{id}/insights` | works | effort reporting on an account without ACU metering: `session_size`, message counts |
 | Enterprise code scanning | `GET /v3/enterprise/code-scans/findings` | **403** | not available to this org — scanner intake uses OSS adapters instead |
 
-Two honest caveats:
+Three honest caveats:
 
-- **ACU accounting reads zero.** Both `consumption/daily` and every session's
-  `acus_consumed` returned `0.0` for this org while real sessions ran and
-  produced PRs. The budget code is live and enforced against whatever the API
-  reports; it simply has nothing to enforce against here. The dashboard shows
-  the API's number rather than an estimate, and no ACU figure in this project
-  is modelled, extrapolated, or filled in.
+- **ACUs are the wrong unit for this account, not a broken one.** Both
+  `consumption/daily` and every session's `acus_consumed` return `0.0` here
+  while real sessions run and open PRs. ACUs are the *Enterprise* billing unit;
+  self-serve plans consume included quota and then on-demand credits, and the
+  API exposes neither per session ([docs](https://docs.devin.ai/admin/billing/usage)).
+  So the swarm reports what the API does return per session
+  (`GET …/sessions/{id}/insights`: Devin's own `session_size` class and message
+  counts) plus wall-clock time, and the dashboard says "not metered" instead of
+  printing a unit cost of 0.0 — shipped work advertised as free is the one
+  rounding error a buyer would never forgive. Nothing is modelled or
+  extrapolated.
+- **An unmetered meter made the budget decorative.** The daily cap was compared
+  against observed consumption, which on this plan is `0.0` forever, so the cap
+  could never bind and the only real limit was `max_concurrent_sessions`. Every
+  dispatch now *reserves* its class's per-session ACU limit for the day and the
+  scheduler spends `max(reserved, observed)`: the cap bounds the blast radius on
+  any plan, and a metered account still corrects it with real numbers.
 - **`status_detail: waiting_for_user`** is the signal that matters, not
   `status`. A session that has finished its work and is waiting for a human
   still reports `status: running`; treating `running` as "busy" would hold a
@@ -180,6 +192,10 @@ with the design.
   idle sat in `dispatched` forever and starved every task sharing its touch
   scope. Two dependency issues were skipped as "conflicting" for hours because
   of it.
+- **The budget could not be exceeded because it could not be spent.** See the
+  unmetered-ACU note above: a cap enforced against a number the plan never
+  populates is not a cap. Found by asking why every nightly run reported
+  "0.0 / 120 ACUs" after dispatching six sessions.
 - **A stale fixture replayed green.** The recorded run predated the reviewer
   change, so the documented stranger path emitted `ReplayMiss` for every review
   request — and still exited 0, because the loop deliberately swallows per-task
@@ -199,4 +215,10 @@ with the design.
 - **Merging on the Devin Review status alone.** Tempting once the fork's CI was
   disabled, and wrong — see above.
 - **Estimating ACUs when the API reports zero.** Would make the dashboard look
-  complete and be fiction.
+  complete and be fiction. The dashboard says "not metered", explains which unit
+  the account is actually billed in, and reports the effort signals the API does
+  return.
+- **Dropping the daily budget because this plan does not meter it.** The cap is
+  a safety property, not an accounting one: it exists so a bad scan cannot
+  dispatch fifty sessions overnight. Reserving per dispatch keeps it real
+  wherever the swarm is installed.

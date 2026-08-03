@@ -1,7 +1,7 @@
 import json
 
 from swarm.issues import IssueSpec, render_issue_body
-from swarm.scan import Finding, collapse, parse_osv
+from swarm.scan import Finding, collapse, parse_osv, run_scanners
 
 
 def _osv(package, version, ids, source="requirements/base.txt", fixed="9.9.9"):
@@ -89,3 +89,21 @@ def test_an_issue_without_metadata_gets_the_widest_scope():
     spec = IssueSpec.from_issue({"number": 8, "title": "t", "body": "just prose", "labels": []})
     assert spec.touch_scope == ["**"]
     assert spec.verify == []
+
+
+def test_a_scanner_that_never_ran_is_reported_not_silently_skipped(tmp_path, monkeypatch):
+    """An empty backlog must not be indistinguishable from a clean repo."""
+    monkeypatch.setattr("swarm.scan.shutil.which", lambda _: None)
+    findings, report = run_scanners(str(tmp_path), tools=["semgrep"])
+    assert findings == []
+    assert [(r.tool, r.status) for r in report] == [("semgrep", "missing")]
+    # nothing claimed to be ok, so `swarm scan` exits nonzero on this
+    assert not any(r.status == "ok" for r in report)
+
+
+def test_a_missing_binary_is_reported_as_missing(tmp_path):
+    from swarm.scan import _run
+
+    report = []
+    assert _run(["definitely-not-a-real-binary"], str(tmp_path), report) is None
+    assert report[0].status == "missing"

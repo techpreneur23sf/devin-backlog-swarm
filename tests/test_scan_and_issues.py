@@ -107,3 +107,34 @@ def test_a_missing_binary_is_reported_as_missing(tmp_path):
     report = []
     assert _run(["definitely-not-a-real-binary"], str(tmp_path), report) is None
     assert report[0].status == "missing"
+
+
+def test_two_scanners_reporting_the_same_pin_are_one_task():
+    """Adding pip-audit alongside osv-scanner must not refile tracked work."""
+    osv = Finding("osv-scanner", "PyPI", "flask", "PYSEC-1", "moderate", "2.3.3", "3.1.3", "base.txt", "x")
+    pa = Finding("pip-audit", "PyPI", "flask", "GHSA-2", "moderate", "2.3.3", "3.1.3", "base.txt", "x")
+    out = collapse([osv, pa])
+    assert len(out) == 1
+    assert out[0].tools == ["osv-scanner", "pip-audit"]
+    assert out[0].aliases == ["GHSA-2"]
+    assert osv.fingerprint == pa.fingerprint
+
+
+def test_an_issue_filed_before_the_key_changed_is_still_recognised():
+    """The old key included the tool; those issues must not be refiled."""
+    f = Finding("pip-audit", "PyPI", "flask", "PYSEC-1", "moderate", "2.3.3", "3.1.3", "base.txt", "x")
+    legacy_osv = f.legacy_fingerprints[0]
+    assert legacy_osv != f.fingerprint
+
+    class Gh:
+        repo = "o/r"
+
+        def list_issues(self, state="all"):
+            return [{"number": 10, "body": f"<!-- swarm-finding: {legacy_osv} -->"}]
+
+        def create_issue(self, *a, **k):  # pragma: no cover - must not be reached
+            raise AssertionError("refiled an issue that already exists")
+
+    from swarm.scan import file_issues
+
+    assert file_issues(Gh(), [f]) == []

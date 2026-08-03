@@ -39,20 +39,32 @@ Invocation is unusual enough to be worth noting: osv-scanner v2 identifies a
 manifest by filename, and Superset's are `requirements/*.txt`, so each is passed
 explicitly as `-L requirements.txt:requirements/base.txt`.
 
-### `pip-audit` (PyPA) — second opinion, and honest about failing
+### `pip-audit` (PyPA) — the second opinion
 
 Same class of check from a different source of truth: it resolves the
-requirements file in a throwaway virtualenv and audits the *resolved* set
-against PyPI's advisory feed. Because it resolves rather than parses, it sees
-transitive packages a manifest does not name — and for the same reason it fails
-where resolution fails. On this fork it fails on Python < 3.11 (Superset's own
-metadata requires 3.11+).
+requirements file in a throwaway virtualenv and audits the *resolved* set against
+PyPI's advisory feed. Because it resolves rather than parses, it sees transitive
+packages a manifest does not name — and for the same reason it fails wherever
+resolution fails. It contributes 8 raw findings on the CI runner
+([run](https://github.com/techpreneur23sf/apache-superset/actions/runs/30853970636))
+and fails outright on Python < 3.11, because Superset's own package metadata
+requires 3.11+.
 
-That failure taught the pipeline something: a scanner that crashes used to
-contribute silently zero findings, which is indistinguishable from a clean
-repository. Each tool now reports `ok | missing | error` with its stderr tail in
-the job summary, and `swarm scan` exits nonzero when no scanner produced output.
-An empty backlog is only good news if something actually looked.
+That asymmetry taught the pipeline two things.
+
+**A scanner that crashes used to contribute silently zero findings** — which is
+indistinguishable from a clean repository. Each tool now reports `ok | missing |
+error` with its stderr tail in the job summary, and `swarm scan` exits nonzero
+when no scanner produced output. An empty backlog is only good news if something
+actually looked.
+
+**And a second scanner used to refile work already tracked.** The dedupe key was
+`sha256(tool|ecosystem|package|version)`, so the same vulnerable pin reported by
+`pip-audit` hashed differently from `osv-scanner`'s — three duplicate issues, one
+per package. Identity belongs to the *finding*, not the tool that noticed it, so
+the tool is out of the key, findings from several tools collapse into one task
+(the issue body names every reporter), and issues filed under the old key are
+still recognised.
 
 ### `semgrep` — code-level findings, adapter shipped, not enabled
 
@@ -81,7 +93,7 @@ advisory ids** across **8 packages**. Filing one issue per record would file 40
 issues, refile them next week, and dispatch several sessions to edit the same
 line of the same file.
 
-Collapsing happens twice:
+Collapsing happens three ways:
 
 1. **Per package, not per advisory.** `mcp` has six advisories; it needs one
    bump. Advisory ids beyond the first are folded into the issue body as
@@ -91,11 +103,12 @@ Collapsing happens twice:
    `development.txt` needs one PR touching both, so every affected file is
    listed in the issue's `touch_scope` — which is also what stops two sessions
    racing on `requirements/`.
+3. **Per finding, not per scanner.** Two tools reporting the same vulnerable pin
+   is one piece of work.
 
-Identity is `sha256(tool|ecosystem|package|current_version)`, recorded in the
-issue body as `<!-- swarm-finding: … -->`. Re-running the scan finds the
-fingerprint on the existing issue and files nothing. Titles change; fingerprints
-do not.
+Identity is `sha256(ecosystem|package|current_version)`, recorded in the issue
+body as `<!-- swarm-finding: … -->`. Re-running the scan finds the fingerprint on
+the existing issue and files nothing. Titles change; fingerprints do not.
 
 ## Classification is what makes remediation dispatchable
 

@@ -52,8 +52,8 @@ Three honest caveats:
 ## Enterprise scanner → OSS adapters
 
 The enterprise scan endpoint is 403 for this org, so intake is built around the
-*finding*, not the tool: `scan.py` normalises `osv-scanner` and `pip-audit`
-output into one `Finding` shape, and anything that can produce that shape
+*finding*, not the tool: `scan.py` normalises `osv-scanner`, `pip-audit` and
+`semgrep` output into one `Finding` shape, and anything that can produce that shape
 (Snyk, Dependabot alerts, an internal scanner) plugs in without touching the
 issue-filing or dispatch code.
 
@@ -62,9 +62,10 @@ produced 40 advisory records covering 11 package/file pairs — the same package
 pinned in two requirements files, and several advisories aliasing the same
 vulnerability. Keying issues on the advisory id would have filed 40 issues and
 re-filed them on the next run. The fingerprint is therefore
-`sha256(tool|ecosystem|package|current_version)`: advisory ids and file paths
-are folded into the issue body as aliases and affected files. That collapsed
-the same scan to **8 real tasks**.
+`sha256(ecosystem|package|current_version)` — scanner-independent, because two
+tools noticing the same vulnerable pin is one piece of work — and advisory ids,
+file paths and reporting tools are folded into the issue body as aliases,
+affected files and reporters. That collapsed the same scan to **8 real tasks**.
 
 ## GitHub as the entire runtime
 
@@ -231,10 +232,18 @@ with the design.
   `verify`.
 - **A crashed scanner looked like a clean repository.** `pip-audit` resolves the
   requirements file in a throwaway venv and fails below Python 3.11, which
-  Superset's own metadata requires — contributing zero findings, silently.
-  Scanners now report `ok | missing | error` with their stderr tail, and a scan
-  where nothing ran exits nonzero. An empty backlog is only good news if
-  something looked.
+  Superset's own metadata requires — contributing zero findings, silently, with a
+  zero exit code for the workflow. Scanners now report `ok | missing | error`
+  with their stderr tail, and a scan where nothing ran exits nonzero. An empty
+  backlog is only good news if something looked.
+- **A second scanner refiled work already tracked.** The dedupe key was
+  `sha256(tool|ecosystem|package|version)`, so once `pip-audit` ran alongside
+  `osv-scanner` the same vulnerable pin hashed to a new fingerprint and three
+  duplicate issues were filed (#40–#42, closed with the explanation). Identity
+  belongs to the finding, not to the tool that noticed it: the tool is out of the
+  key, multi-tool findings collapse into one task naming every reporter, and the
+  old per-tool keys are still recognised so the fix is not itself a refiling
+  event.
 - **A stale fixture replayed green.** The recorded run predated the reviewer
   change, so the documented stranger path emitted `ReplayMiss` for every review
   request — and still exited 0, because the loop deliberately swallows per-task

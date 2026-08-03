@@ -29,6 +29,10 @@ from .issues import FINDING_RE, render_issue_body
 SCANNER_PROVENANCE = "Filed automatically by `swarm scan` from a scanner finding."
 
 
+def _sha(raw: str) -> str:
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
 @dataclass
 class Finding:
     tool: str
@@ -48,10 +52,26 @@ class Finding:
     #: every requirements file the package is pinned in
     files: list[str] = field(default_factory=list)
 
+    #: every tool that reported this package, once findings are collapsed
+    tools: list[str] = field(default_factory=list)
+
     @property
     def fingerprint(self) -> str:
-        raw = f"{self.tool}|{self.ecosystem}|{self.package}|{self.current_version}"
-        return hashlib.sha256(raw.encode()).hexdigest()[:16]
+        """Identity of the *finding*, deliberately independent of the scanner.
+
+        Two scanners reporting the same vulnerable pin is one piece of work. When
+        the tool was part of the key, adding `pip-audit` alongside `osv-scanner`
+        refiled three packages that were already tracked.
+        """
+        return _sha(f"{self.ecosystem}|{self.package}|{self.current_version}")
+
+    @property
+    def legacy_fingerprints(self) -> list[str]:
+        """Pre-existing issues were filed with the tool in the key."""
+        return [
+            _sha(f"{tool}|{self.ecosystem}|{self.package}|{self.current_version}")
+            for tool in ("osv-scanner", "pip-audit", "semgrep")
+        ]
 
     @property
     def title(self) -> str:
@@ -72,12 +92,15 @@ def collapse(findings: Sequence[Finding]) -> list[Finding]:
     """
     grouped: dict[str, Finding] = {}
     for f in findings:
-        key = f"{f.tool}|{f.package}"
+        key = f.fingerprint if f.tool != "semgrep" else f"semgrep|{f.advisory}|{f.file}"
         head = grouped.get(key)
         if head is None:
             f.files = [f.file]
+            f.tools = [f.tool]
             grouped[key] = f
             continue
+        if f.tool not in head.tools:
+            head.tools.append(f.tool)
         if f.file not in head.files:
             head.files.append(f.file)
         if f.advisory not in head.aliases and f.advisory != head.advisory:
@@ -295,8 +318,9 @@ def finding_to_issue_body(f: Finding) -> str:
         advisories = ", ".join(f"`{a}`" for a in [f.advisory] + f.aliases)
         files = f.files or [f.file]
         where = ", ".join(f"`requirements/{x}`" for x in files)
+        reporters = ", ".join(f"`{t}`" for t in (f.tools or [f.tool]))
         problem = (
-            f"`{f.tool}` reports {advisories} affecting `{f.package}=={f.current_version}` "
+            f"{reporters} reports {advisories} affecting `{f.package}=={f.current_version}` "
             f"pinned in {where}.\n\n> {f.summary}\n\n"
             f"Bump `{f.package}`{target} in every file above. Superset compiles "
             f"`requirements/*.txt` from the matching `requirements/*.in` with `pip-compile`, so "
@@ -334,7 +358,7 @@ def file_issues(
     known = existing_fingerprints(gh) if not dry_run else {}
     created: list[dict[str, Any]] = []
     for f in list(findings)[:limit]:
-        if f.fingerprint in known:
+        if any(fp in known for fp in [f.fingerprint, *f.legacy_fingerprints]):
             continue
         labels = [f"class:{f.issue_class}", "tier:1", "swarm:queued", "scanner"]
         if auto_label:

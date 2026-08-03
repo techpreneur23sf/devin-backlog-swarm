@@ -138,3 +138,21 @@ def test_an_issue_filed_before_the_key_changed_is_still_recognised():
     from swarm.scan import file_issues
 
     assert file_issues(Gh(), [f]) == []
+
+
+def test_low_impact_semgrep_hits_are_not_filed():
+    """`p/python` reports plenty of style-grade hits; filing them buries the rest."""
+    from swarm.scan import parse_semgrep
+
+    out = json.dumps(
+        {
+            "results": [
+                {"path": "a.py", "check_id": "x.insecure-hash", "extra": {"metadata": {"impact": "MEDIUM"}, "message": "md5"}},
+                {"path": "b.py", "check_id": "x.nitpick", "extra": {"metadata": {"impact": "LOW"}, "message": "meh"}},
+            ]
+        }
+    )
+    findings = parse_semgrep(out)
+    assert [f.advisory for f in findings] == ["insecure-hash"]
+    assert findings[0].issue_class == "security"
+    assert len(parse_semgrep(out, min_impact=False)) == 2

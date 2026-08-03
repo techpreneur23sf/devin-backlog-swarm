@@ -237,19 +237,27 @@ def parse_pip_audit(output: str, file: str = "requirements/base.txt") -> list[Fi
     return findings
 
 
-def parse_semgrep(output: str) -> list[Finding]:
+#: semgrep impacts worth a human's attention. `p/python` on a codebase this size
+#: reports plenty of LOW/INFO style hits; filing them buries the ones that matter.
+SEMGREP_IMPACTS = ("medium", "high", "critical", "error")
+
+
+def parse_semgrep(output: str, min_impact: bool = True) -> list[Finding]:
     data = json.loads(output)
     findings: list[Finding] = []
     for res in data.get("results", []) or []:
         extra = res.get("extra") or {}
         path = res.get("path", "")
+        severity = str((extra.get("metadata") or {}).get("impact", extra.get("severity", "moderate"))).lower()
+        if min_impact and severity not in SEMGREP_IMPACTS:
+            continue
         findings.append(
             Finding(
                 tool="semgrep",
                 ecosystem="code",
                 package=path,
                 advisory=res.get("check_id", "?").split(".")[-1],
-                severity=str((extra.get("metadata") or {}).get("impact", extra.get("severity", "moderate"))).lower(),
+                severity=severity,
                 current_version="",
                 fixed_version=None,
                 file=path,

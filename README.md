@@ -16,7 +16,7 @@ It runs entirely on GitHub Actions. No service, no database, nothing to keep up.
 git clone https://github.com/techpreneur23sf/devin-backlog-swarm
 cd devin-backlog-swarm
 pip install -e .
-swarm replay --replay fixtures/run-2026-08-02/
+swarm replay --replay fixtures/run-2026-08-03/
 ```
 
 That walks a **recorded run of the real thing** — actual Devin and GitHub API

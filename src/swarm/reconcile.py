@@ -176,6 +176,32 @@ def reconcile(
         except Exception as exc:  # one bad task must not stall the loop
             task.last_error = f"{type(exc).__name__}: {exc}"[:500]
             log.append(f"#{task.issue_number}: reconcile error: {task.last_error}")
+
+    log.extend(backfill_effort(devin, ledger))
+    return log
+
+
+def backfill_effort(devin: DevinClient, ledger: Ledger) -> list[str]:
+    """Fill in effort for finished tasks, including terminal ones.
+
+    A merged task is never reconciled again, so cost reporting would only ever
+    cover work still in flight — the opposite of what a leader wants to see.
+    One insights call per session, once, forever.
+    """
+    log: list[str] = []
+    for task in ledger.tasks.values():
+        if not task.session_id or task.session_size:
+            continue
+        try:
+            insights = devin.get_insights(task.session_id) or {}
+        except Exception as exc:
+            log.append(f"#{task.issue_number}: insights unavailable: {type(exc).__name__}")
+            continue
+        if not insights.get("session_size"):
+            continue
+        task.session_size = insights["session_size"]
+        task.devin_messages = int(insights.get("num_devin_messages") or 0)
+        task.acus_consumed = float(insights.get("acus_consumed") or task.acus_consumed or 0)
     return log
 
 

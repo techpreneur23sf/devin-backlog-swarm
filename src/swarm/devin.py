@@ -57,6 +57,8 @@ class DevinClient:
         self.api_key = api_key or os.environ.get("DEVIN_API_KEY", "")
         self.org_id = org_id or os.environ.get("DEVIN_ORG_ID", "")
         self.http = transport or transport_from_env()
+        #: title -> playbook_id, fetched once per process
+        self._playbooks: dict[str, str] | None = None
         if self.http.mode != "replay" and not (self.api_key and self.org_id):
             raise RuntimeError("DEVIN_API_KEY and DEVIN_ORG_ID are required in live mode")
 
@@ -141,6 +143,33 @@ class DevinClient:
 
     def terminate(self, session_id: str) -> Any:
         return self._post(f"/sessions/{session_id}/terminate", {}, allow_status=(404, 409))
+
+    # -- playbooks ------------------------------------------------------------
+    def list_playbooks(self) -> list[dict[str, Any]]:
+        page = self._get("/playbooks") or {}
+        return page.get("items") or []
+
+    def create_playbook(self, title: str, body: str) -> dict[str, Any]:
+        return self._post("/playbooks", {"title": title, "body": body})
+
+    def update_playbook(self, playbook_id: str, title: str, body: str) -> dict[str, Any]:
+        return self.http.request(
+            "PUT",
+            self._url(f"/playbooks/{playbook_id}"),
+            headers=self._headers,
+            json_body={"title": title, "body": body},
+        ).json()
+
+    def playbook_id_for_title(self, title: str) -> str | None:
+        """Resolve a playbook by title so policy.yaml holds names, not UUIDs.
+
+        A config file full of `playbook-<uuid>` cannot be reviewed, and it cannot
+        be copied into another org. Titles are the contract; `playbooks sync`
+        owns the mapping.
+        """
+        if self._playbooks is None:
+            self._playbooks = {p.get("title", ""): p.get("playbook_id", "") for p in self.list_playbooks()}
+        return self._playbooks.get(title) or None
 
     def get_insights(self, session_id: str) -> dict[str, Any]:
         """Per-session effort: size class, message counts, category.

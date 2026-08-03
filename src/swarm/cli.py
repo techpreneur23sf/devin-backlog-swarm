@@ -9,6 +9,7 @@ in this CLI assumes it is running inside GitHub Actions except the optional
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import sys
@@ -92,7 +93,15 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     check("Devin API reachable / identity", lambda: devin.whoami())
     check("Consumption API (budget enforcement)", lambda: devin.daily_consumption())
-    check("Playbooks readable", lambda: f"{len(devin.list_sessions(tags=['swarm']))} swarm sessions found")
+    check("Swarm sessions listable by tag", lambda: f"{len(devin.list_sessions(tags=['swarm']))} swarm sessions found")
+    check(
+        "Playbooks synced for every bound class",
+        lambda: ", ".join(
+            f"{cls}:{'yes' if devin.playbook_id_for_title(title) else 'MISSING'}"
+            for cls, title in sorted(policy.playbooks.items())
+        )
+        or "none bound in policy.yaml",
+    )
     check("GitHub repo readable", lambda: gh.repo_info().get("full_name"))
     check("Issues enabled", lambda: gh.repo_info().get("has_issues"))
     check("State branch present", lambda: gh.branch_exists(args.state_branch))
@@ -148,6 +157,44 @@ def cmd_scan(args: argparse.Namespace) -> int:
         print("\nno scanner produced output — treating this as a failed scan, not a clean repository")
         return 1
     return 0
+
+
+def cmd_playbooks(args: argparse.Namespace) -> int:
+    """Push `playbooks/*.md` to the org, idempotently, keyed on title.
+
+    Playbooks are the org's durable procedure for a class of work; the issue only
+    supplies the specifics. Keeping them in git and syncing them means the
+    standard is reviewed like code instead of being retyped into a prompt.
+    """
+    devin = DevinClient(transport=_transport(args))
+    existing = {p.get("title", ""): p.get("playbook_id", "") for p in devin.list_playbooks()}
+    lines = ["## Swarm playbooks", "", "| Playbook | Class | Action | ID |", "|---|---|---|---|"]
+    policy = Policy.load(args.policy)
+    by_title = {v: k for k, v in policy.playbooks.items()}
+    for path in sorted(glob.glob(os.path.join(args.dir, "*.md"))):
+        body = open(path).read()
+        title = _playbook_title(body, path)
+        if args.dry_run:
+            action, pid = "would " + ("update" if title in existing else "create"), existing.get(title, "—")
+        elif title in existing:
+            action, pid = "updated", devin.update_playbook(existing[title], title, body).get("playbook_id", "")
+        else:
+            action, pid = "created", devin.create_playbook(title, body).get("playbook_id", "")
+        lines.append(f"| {title} | `{by_title.get(title, '(unbound)')}` | {action} | `{pid}` |")
+    lines += [
+        "",
+        "Sessions bind these by title through `playbooks:` in `policy.yaml`, so the "
+        "config stays reviewable and portable between orgs.",
+    ]
+    _emit_summary("\n".join(lines) + "\n")
+    return 0
+
+
+def _playbook_title(body: str, path: str) -> str:
+    for line in body.splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+    return os.path.basename(path).removesuffix(".md")
 
 
 def cmd_seed(args: argparse.Namespace) -> int:
@@ -446,6 +493,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--auto-label", action="store_true", help="also apply devin:auto (dispatches immediately)")
     s.add_argument("--dry-run", action="store_true")
     s.set_defaults(func=cmd_scan)
+
+    pb = sub.add_parser("playbooks", help="sync playbooks/*.md to the Devin org (idempotent, by title)")
+    pb.add_argument("--dir", default="playbooks")
+    pb.add_argument("--dry-run", action="store_true")
+    pb.set_defaults(func=cmd_playbooks)
 
     sd = sub.add_parser("seed", help="file the hand-curated tier-2/tier-3 backlog from YAML")
     sd.add_argument("--file", default="backlog/superset.yaml")

@@ -102,6 +102,7 @@ return per session (`session_size`, Devin message counts, wall-clock time).
 | `swarm doctor` | verifies every API capability the system assumes |
 | `swarm bootstrap` | labels, `swarm-state`, `gh-pages` |
 | `swarm scan` | OSS scanners → deduplicated issues (fingerprinted, never refiled) — see [`docs/SCANS.md`](docs/SCANS.md) |
+| `swarm playbooks` | syncs `playbooks/*.md` to the Devin org, idempotently, by title |
 | `swarm seed` | files the hand-curated backlog from `backlog/*.yaml` |
 | `swarm dispatch --issue N` | one session, non-blocking |
 | `swarm nightly` | conflict-aware fan-out under concurrency and ACU caps |
@@ -113,7 +114,8 @@ return per session (`session_size`, Devin message counts, wall-clock time).
 
 ## Setup against your own repository
 
-1. `swarm bootstrap` (needs `GITHUB_TOKEN`, `DEVIN_API_KEY`, `DEVIN_ORG_ID`).
+1. `swarm bootstrap` (needs `GITHUB_TOKEN`, `DEVIN_API_KEY`, `DEVIN_ORG_ID`), then
+   `swarm playbooks` to push `playbooks/*.md` to your org.
 2. Copy `.github/workflows/swarm-*.yml` from the target repo into yours and set
    the three secrets.
 3. Adjust `policy.yaml` — tiers, protected paths, budgets, playbooks.

@@ -18,7 +18,7 @@ the load-bearing ones on demand.
 | List sessions by tag | `GET …/sessions` | works | ledger rebuild without any local state |
 | Send a message | `POST …/sessions/{id}/messages` | works | nudging a session that is waiting on a human |
 | Terminate a session | `POST …/sessions/{id}` | works | the sweeper: stops sessions parked in `waiting_for_user` |
-| Playbooks | `GET …/playbooks` | works | per-class playbook binding in `policy.yaml` |
+| Playbooks | `GET/POST/PUT …/playbooks` | works | `playbooks/*.md` in git, synced by `swarm playbooks`, bound per class in `policy.yaml` |
 | Request a review | `POST …/pr-reviews` | works | review gate |
 | Read a review verdict | `GET …/pr-reviews?pr_url=…` | works | review gate |
 | Daily consumption | `GET …/consumption/daily` | works, **reports 0.0** | budget enforcement (see below) |
@@ -118,6 +118,23 @@ editing unrelated files fails CI even if the tests pass.
 `Devin Review`'s own commit status is excluded from the CI computation
 (`NON_CI_CONTEXTS`). It is a review signal; counting it as CI would let a PR
 merge because the reviewer agreed with the author, with no test having run.
+
+## Playbooks hold the standard; the issue holds the specifics
+
+Two things get sent to a session, and they change on different clocks. The
+issue's facts — this package, this version, these files, these commands — change
+every task. How this organisation does a major dependency bump on Superset —
+`requirements/*.in` is compiled to `*.txt`, never run the full suite, a refusal
+with a reason beats a speculative patch — changes about twice a year.
+
+Putting the second kind in the prompt means it is retyped, drifts, and is
+reviewable by nobody. So it lives in `playbooks/*.md`, is reviewed as code, and
+`swarm playbooks` syncs it to the org idempotently by title. `policy.yaml` binds
+titles, not `playbook-<uuid>`: a config full of UUIDs cannot be reviewed and
+cannot be copied to another org, and `swarm doctor` fails loudly when a bound
+title has no playbook behind it. Dispatch still proceeds if a playbook is
+missing — the issue carries the task, and refusing to work because the standard
+is unsynced would be the wrong failure.
 
 ## Merge policy
 

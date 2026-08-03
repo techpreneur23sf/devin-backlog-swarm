@@ -57,3 +57,15 @@ tiers:
         - "superset/views/base*.py"
         - "**/auth/**"
       blockers_nonempty: true
+
+# Per-class playbooks, bound by title and synced from `playbooks/*.md` with
+# `swarm playbooks sync`. Titles rather than `playbook-<uuid>` so this file stays
+# reviewable and portable to another org; the durable procedure for a class of
+# work lives in the playbook, and the issue supplies only the specifics.
+playbooks:
+  dep-bump-patch: "Superset: patch/minor dependency bump"
+  dep-bump-major: "Superset: major-version dependency bump"
+  deprecation: "Superset: deprecation migration"
+  code-quality: "Superset: correctness and dead-code cleanup"
+  security: "Superset: security finding"
+  authz: "Superset: security finding"

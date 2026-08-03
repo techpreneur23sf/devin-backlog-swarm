@@ -9,6 +9,7 @@ user on 2026-08-01 (see DECISIONS.md, D-001):
     GET  /v3/organizations/{org}/sessions/{id}       reconcile
     POST /v3/organizations/{org}/sessions/{id}/messages
     POST /v3/organizations/{org}/sessions/{id}/terminate
+    GET  /v3/organizations/{org}/sessions/{id}/insights  effort (size, messages)
     GET  /v3/organizations/{org}/consumption/daily   ACU budget
     POST /v3/organizations/{org}/pr-reviews          Devin Review
     GET  /v3/organizations/{org}/pr-reviews?pr_url=  Devin Review verdict
@@ -56,6 +57,8 @@ class DevinClient:
         self.api_key = api_key or os.environ.get("DEVIN_API_KEY", "")
         self.org_id = org_id or os.environ.get("DEVIN_ORG_ID", "")
         self.http = transport or transport_from_env()
+        #: title -> playbook_id, fetched once per process
+        self._playbooks: dict[str, str] | None = None
         if self.http.mode != "replay" and not (self.api_key and self.org_id):
             raise RuntimeError("DEVIN_API_KEY and DEVIN_ORG_ID are required in live mode")
 
@@ -141,6 +144,46 @@ class DevinClient:
     def terminate(self, session_id: str) -> Any:
         return self._post(f"/sessions/{session_id}/terminate", {}, allow_status=(404, 409))
 
+    # -- playbooks ------------------------------------------------------------
+    def list_playbooks(self) -> list[dict[str, Any]]:
+        page = self._get("/playbooks") or {}
+        return page.get("items") or []
+
+    def create_playbook(self, title: str, body: str) -> dict[str, Any]:
+        return self._post("/playbooks", {"title": title, "body": body})
+
+    def update_playbook(self, playbook_id: str, title: str, body: str) -> dict[str, Any]:
+        return self.http.request(
+            "PUT",
+            self._url(f"/playbooks/{playbook_id}"),
+            headers=self._headers,
+            json_body={"title": title, "body": body},
+        ).json()
+
+    def playbook_id_for_title(self, title: str) -> str | None:
+        """Resolve a playbook by title so policy.yaml holds names, not UUIDs.
+
+        A config file full of `playbook-<uuid>` cannot be reviewed, and it cannot
+        be copied into another org. Titles are the contract; `playbooks sync`
+        owns the mapping.
+        """
+        if self._playbooks is None:
+            self._playbooks = {p.get("title", ""): p.get("playbook_id", "") for p in self.list_playbooks()}
+        return self._playbooks.get(title) or None
+
+    def get_insights(self, session_id: str) -> dict[str, Any]:
+        """Per-session effort: size class, message counts, category.
+
+        The only usage signal the API reports on a plan that does not meter
+        ACUs. 404s while a session is too short to analyse.
+        """
+        return self.http.request(
+            "GET",
+            self._url(f"/sessions/{session_id}/insights"),
+            headers=self._headers,
+            allow_status=(404, 409, 425),
+        ).json() or {}
+
     def daily_consumption(self) -> dict[str, Any]:
         return self._get("/consumption/daily")
 
@@ -159,7 +202,13 @@ class DevinClient:
 
 
 def acus_today(client: DevinClient) -> float:
-    """ACUs consumed in the current billing day, straight from the API."""
+    """ACUs consumed in the current billing day, straight from the API.
+
+    Reports 0.0 on accounts Devin does not meter in ACUs (self-serve plans bill
+    included quota then on-demand credits, and neither is exposed per session).
+    A budget that only counts observed ACUs is therefore not a budget at all on
+    such a plan — see `reserved_acus_today`, which is what the scheduler spends.
+    """
     data = client.daily_consumption() or {}
     by_date = data.get("consumption_by_date") or []
     if by_date:

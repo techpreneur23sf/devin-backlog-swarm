@@ -48,13 +48,26 @@ def render(ledger: Ledger, repo: str, run_context: dict[str, Any] | None = None)
     ctx = run_context or {}
     generated = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
 
+    effort = m["effort"]
+    sizes = ", ".join(f"{n}×{k}" for k, n in effort["session_sizes"].items()) or "—"
+    cost_card = (
+        ("ACUs per merged PR", _fmt(m["acus_per_merged_pr"]), "unit cost of shipped work")
+        if m["acus_metered"]
+        # An account Devin does not meter in ACUs reports 0.0 for every session,
+        # so there is no unit cost to show. Showing "0.0 ACUs" would read as free.
+        else ("Cost per merged PR", "not metered", "this plan bills usage, not ACUs — see below")
+    )
     cards = [
-        ("ACUs per merged PR", _fmt(m["acus_per_merged_pr"]), "unit cost of shipped work"),
+        cost_card,
         ("Median issue → PR", _fmt(m["median_issue_to_pr_hours"], " h"), "against a backlog measured in weeks"),
         ("Autonomy rate", _pct(m["autonomy_rate"]), "finished with zero human input"),
         ("Merge rate", _pct(m["merge_rate"]), "of dispatched sessions"),
         ("PRs opened", str(c["prs_opened"]), f"{c['merged']} merged, {c['needs_human']} awaiting a human"),
-        ("ACUs spent", _fmt(m["acus_total"]), "total, all sessions"),
+        (
+            "Median session",
+            _fmt(effort["median_session_hours"], " h"),
+            f"dispatch → finish · sizes {sizes}",
+        ),
     ]
     card_html = "\n".join(
         f'<div class="card"><div class="k">{k}</div><div class="v">{v}</div><div class="s">{s}</div></div>'
@@ -75,13 +88,13 @@ def render(ledger: Ledger, repo: str, run_context: dict[str, Any] | None = None)
             f'<td><span class="pill" style="background:{colour}">{t.state}</span></td>'
             f"<td>{pr}</td><td>{t.ci_status or '—'}</td><td>{t.review_status or '—'}</td>"
             f"<td>{so.get('confidence') or '—'}</td>"
-            f"<td>{t.acus_consumed:.1f}</td><td>{sess}</td>"
+            f"<td>{t.session_size or '—'}</td><td>{t.devin_messages or '—'}</td><td>{sess}</td>"
             f"</tr>"
         )
 
     class_rows = "\n".join(
         f"<tr><td><code>{k}</code></td><td>{v['total']}</td><td>{v['pr']}</td><td>{v['merged']}</td>"
-        f"<td>{v['merge_rate'] * 100:.0f}%</td><td>{v['acus']:.1f}</td></tr>"
+        f"<td>{v['merge_rate'] * 100:.0f}%</td></tr>"
         for k, v in sorted(m["by_class"].items())
     )
     failure_rows = "\n".join(
@@ -131,12 +144,15 @@ footer {{ color:#64748b; font-size:12px; margin-top:32px; border-top:1px solid #
 
   <h2>Tasks</h2>
   <table><thead><tr><th>Issue</th><th>Title</th><th>Class</th><th>State</th><th>PR</th><th>CI</th>
-  <th>Review</th><th>Confidence</th><th>ACUs</th><th>Session</th></tr></thead>
-  <tbody>{''.join(rows) or '<tr><td colspan="10">No tasks yet.</td></tr>'}</tbody></table>
+  <th>Review</th><th>Confidence</th><th>Size</th><th>Devin msgs</th><th>Session</th></tr></thead>
+  <tbody>{''.join(rows) or '<tr><td colspan="11">No tasks yet.</td></tr>'}</tbody></table>
+
+  <h2>Cost</h2>
+  <p class="sub">{_cost_note(m)}</p>
 
   <h2>By issue class</h2>
-  <table><thead><tr><th>Class</th><th>Tasks</th><th>PRs</th><th>Merged</th><th>Merge rate</th><th>ACUs</th></tr></thead>
-  <tbody>{class_rows or '<tr><td colspan="6">—</td></tr>'}</tbody></table>
+  <table><thead><tr><th>Class</th><th>Tasks</th><th>PRs</th><th>Merged</th><th>Merge rate</th></tr></thead>
+  <tbody>{class_rows or '<tr><td colspan="5">—</td></tr>'}</tbody></table>
 
   <h2>Failure taxonomy</h2>
   <p class="sub">Separates "the agent is bad" from "our configuration is bad" — usually the latter.</p>
@@ -150,6 +166,26 @@ footer {{ color:#64748b; font-size:12px; margin-top:32px; border-top:1px solid #
   </footer>
 </main></body></html>
 """
+
+
+def _cost_note(m: dict) -> str:
+    """Say which unit the account is billed in rather than inventing one."""
+    if m["acus_metered"]:
+        return (
+            f"{m['acus_total']} ACUs across every session, {m['acus_per_merged_pr']} per merged PR — "
+            "total spend divided by merges, so failed attempts are charged to the changes that landed."
+        )
+    return (
+        "<code>acus_consumed</code> is <code>0.0</code> on every session here and "
+        "<code>GET /consumption/daily</code> reports <code>total_acus: 0.0</code>: ACUs are the "
+        "Enterprise billing unit, and this account is billed for usage as included quota plus "
+        "on-demand credits, which the API does not expose per session. Rather than print a "
+        "fabricated unit cost, effort is reported in the units the API does return — Devin's own "
+        f"session size classification ({', '.join(f'{n}×{k}' for k, n in m['effort']['session_sizes'].items()) or '—'}), "
+        f"{m['effort']['devin_messages_total']} Devin messages, and wall-clock session time. "
+        "The daily budget cap still binds: each dispatch reserves its class's per-session ACU "
+        "limit up front instead of trusting an unmetered zero."
+    )
 
 
 def _esc(text: str) -> str:

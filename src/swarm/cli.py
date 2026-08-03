@@ -9,6 +9,7 @@ in this CLI assumes it is running inside GitHub Actions except the optional
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import sys
@@ -24,7 +25,7 @@ from .models import NEEDS_HUMAN, QUEUED, REVIEW_PENDING, Ledger, Task
 from .policy import Policy
 from .reconcile import reconcile
 from .scan import existing_fingerprints, file_issues, run_scanners
-from .scheduler import plan
+from .scheduler import plan, reserved_acus_today
 from .state import STATE_BRANCH, StateStore, rebuild
 from .transport import LIVE, RECORD, REPLAY, Transport, read_meta
 from .verify import run as verify_pr
@@ -92,7 +93,15 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     check("Devin API reachable / identity", lambda: devin.whoami())
     check("Consumption API (budget enforcement)", lambda: devin.daily_consumption())
-    check("Playbooks readable", lambda: f"{len(devin.list_sessions(tags=['swarm']))} swarm sessions found")
+    check("Swarm sessions listable by tag", lambda: f"{len(devin.list_sessions(tags=['swarm']))} swarm sessions found")
+    check(
+        "Playbooks synced for every bound class",
+        lambda: ", ".join(
+            f"{cls}:{'yes' if devin.playbook_id_for_title(title) else 'MISSING'}"
+            for cls, title in sorted(policy.playbooks.items())
+        )
+        or "none bound in policy.yaml",
+    )
     check("GitHub repo readable", lambda: gh.repo_info().get("full_name"))
     check("Issues enabled", lambda: gh.repo_info().get("has_issues"))
     check("State branch present", lambda: gh.branch_exists(args.state_branch))
@@ -118,8 +127,13 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
-    gh, devin, policy, store, _ = _clients(args)
-    findings = run_scanners(args.repo_dir, tools=args.tools.split(","))
+    """Findings in, deduplicated issues out.
+
+    GitHub-only, like `verify`: intake files issues, it never talks to Devin, so
+    a scan cron must not fail for want of a Devin credential.
+    """
+    gh = GitHubClient(repo=args.repo, transport=_transport(args))
+    findings, tool_runs = run_scanners(args.repo_dir, tools=args.tools.split(","))
     created = file_issues(gh, findings, auto_label=args.auto_label, limit=args.limit, dry_run=args.dry_run)
     lines = [
         "## Swarm scan",
@@ -127,19 +141,70 @@ def cmd_scan(args: argparse.Namespace) -> int:
         f"{len(findings)} distinct package findings from `{args.tools}` · {len(created)} new issues "
         f"(the rest were already tracked — deduplication is on the finding fingerprint, not the title)",
         "",
+        "| Scanner | Status | Raw findings | Detail |",
+        "|---|---|---|---|",
     ]
+    for run in tool_runs:
+        lines.append(f"| `{run.tool}` | {run.status} | {run.findings or '—'} | {run.detail or '—'}|")
+    lines.append("")
     for issue in created:
         num = issue.get("number")
         lines.append(f"- {'#' + str(num) if num else '[dry-run]'} {issue.get('title')}")
     _emit_summary("\n".join(lines) + "\n")
+    # A scan where nothing ran is not a clean repository. Fail rather than
+    # report an empty backlog that nobody will question.
+    if tool_runs and not any(r.status == "ok" for r in tool_runs):
+        print("\nno scanner produced output — treating this as a failed scan, not a clean repository")
+        return 1
     return 0
 
 
+def cmd_playbooks(args: argparse.Namespace) -> int:
+    """Push `playbooks/*.md` to the org, idempotently, keyed on title.
+
+    Playbooks are the org's durable procedure for a class of work; the issue only
+    supplies the specifics. Keeping them in git and syncing them means the
+    standard is reviewed like code instead of being retyped into a prompt.
+    """
+    devin = DevinClient(transport=_transport(args))
+    existing = {p.get("title", ""): p.get("playbook_id", "") for p in devin.list_playbooks()}
+    lines = ["## Swarm playbooks", "", "| Playbook | Class | Action | ID |", "|---|---|---|---|"]
+    policy = Policy.load(args.policy)
+    by_title = {v: k for k, v in policy.playbooks.items()}
+    for path in sorted(glob.glob(os.path.join(args.dir, "*.md"))):
+        body = open(path).read()
+        title = _playbook_title(body, path)
+        if args.dry_run:
+            action, pid = "would " + ("update" if title in existing else "create"), existing.get(title, "—")
+        elif title in existing:
+            action, pid = "updated", devin.update_playbook(existing[title], title, body).get("playbook_id", "")
+        else:
+            action, pid = "created", devin.create_playbook(title, body).get("playbook_id", "")
+        lines.append(f"| {title} | `{by_title.get(title, '(unbound)')}` | {action} | `{pid}` |")
+    lines += [
+        "",
+        "Sessions bind these by title through `playbooks:` in `policy.yaml`, so the "
+        "config stays reviewable and portable between orgs.",
+    ]
+    _emit_summary("\n".join(lines) + "\n")
+    return 0
+
+
+def _playbook_title(body: str, path: str) -> str:
+    for line in body.splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+    return os.path.basename(path).removesuffix(".md")
+
+
 def cmd_seed(args: argparse.Namespace) -> int:
-    """File the hand-curated tier-2/tier-3 backlog from a YAML definition."""
+    """File the hand-curated tier-2/tier-3 backlog from a YAML definition.
+
+    GitHub-only for the same reason as `scan`: filing issues is intake.
+    """
     import yaml
 
-    gh, devin, policy, store, _ = _clients(args)
+    gh = GitHubClient(repo=args.repo, transport=_transport(args))
     spec = yaml.safe_load(open(args.file).read())
     setup = (spec.get("setup") or "").strip()
     known = existing_fingerprints(gh) if not args.dry_run else {}
@@ -232,11 +297,18 @@ def cmd_nightly(args: argparse.Namespace) -> int:
         task.issue_title, task.issue_class, task.touch_scope = spec.title, spec.issue_class, spec.touch_scope
         ledger.upsert(task)
 
-    spent = acus_today(devin)
+    observed = acus_today(devin)
+    reserved = reserved_acus_today(ledger, policy)
+    # A cap compared against an unmetered 0.0 never binds; spend the larger.
+    spent = max(observed, reserved)
     in_flight = ledger.in_flight()
     unmerged = [t for t in ledger.active() if t not in in_flight]
     to_dispatch, skipped = plan(ledger.queued(), in_flight, policy, spent, holding_scope=unmerged)
-    notes = [f"ACUs spent today: {spent:.1f} / cap {policy.budget.daily_acu_cap}"]
+    metered = "metered" if observed else "this plan does not meter ACUs"
+    notes = [
+        f"Budget today: {spent:.1f} / cap {policy.budget.daily_acu_cap} "
+        f"({reserved:.1f} reserved by dispatches, {observed:.1f} observed — {metered})"
+    ]
     for task in to_dispatch:
         _, note = dispatch_issue(
             gh, devin, ledger, policy, task.issue_number, run_id=args.run_id, base_branch=args.base, dry_run=args.dry_run
@@ -421,6 +493,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--auto-label", action="store_true", help="also apply devin:auto (dispatches immediately)")
     s.add_argument("--dry-run", action="store_true")
     s.set_defaults(func=cmd_scan)
+
+    pb = sub.add_parser("playbooks", help="sync playbooks/*.md to the Devin org (idempotent, by title)")
+    pb.add_argument("--dir", default="playbooks")
+    pb.add_argument("--dry-run", action="store_true")
+    pb.set_defaults(func=cmd_playbooks)
 
     sd = sub.add_parser("seed", help="file the hand-curated tier-2/tier-3 backlog from YAML")
     sd.add_argument("--file", default="backlog/superset.yaml")

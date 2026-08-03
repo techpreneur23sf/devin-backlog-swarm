@@ -26,6 +26,21 @@ def session_tags(repo: str, issue_number: int, issue_class: str, run_id: str | N
     return tags
 
 
+def _playbook_id(devin: DevinClient, policy: Policy, issue_class: str) -> str | None:
+    """Bind the class's playbook, by title unless policy names an id outright.
+
+    Missing is not fatal: a playbook is the org's durable procedure for a class
+    of work, and the issue still carries the task. Dispatching without one is
+    worse than dispatching nothing.
+    """
+    ref = policy.playbook_for(issue_class)
+    if not ref:
+        return None
+    if ref.startswith("playbook-"):
+        return ref
+    return devin.playbook_id_for_title(ref)
+
+
 def already_dispatched(ledger: Ledger, issue_number: int) -> Task | None:
     task = ledger.get(issue_number)
     if task and task.session_id and task.state not in ("queued", "failed"):
@@ -65,16 +80,17 @@ def dispatch_issue(
     prompt = build_prompt(spec, gh.repo, base_branch)
     tags = session_tags(gh.repo, issue_number, spec.issue_class, run_id)
     acu_limit = policy.acu_limit(spec.issue_class)
+    playbook_id = _playbook_id(devin, policy, spec.issue_class)
 
     if dry_run:
-        return task, f"[dry-run] would create session: tags={tags} max_acu={acu_limit}"
+        return task, f"[dry-run] would create session: tags={tags} max_acu={acu_limit} playbook={playbook_id}"
 
     session = devin.create_session(
         prompt=prompt,
         title=f"[swarm] #{issue_number} {spec.title}"[:200],
         tags=tags,
         repos=[f"https://github.com/{gh.repo}"],
-        playbook_id=policy.playbook_for(spec.issue_class),
+        playbook_id=playbook_id,
         max_acu_limit=acu_limit,
         structured_output_schema=REMEDIATION_SCHEMA,
     )

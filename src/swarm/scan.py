@@ -116,11 +116,35 @@ def _vtuple(version: str):
 
 
 # -- adapters -----------------------------------------------------------------
-def _run(cmd: Sequence[str], cwd: str) -> str | None:
+@dataclass
+class ToolRun:
+    """What one scanner did, so a scan that found nothing can be told apart
+    from a scanner that never ran.
+
+    A silent skip is the worst outcome intake can have: an empty backlog looks
+    identical to a clean repository, and nobody investigates good news.
+    """
+
+    tool: str
+    status: str  # ok | missing | error
+    findings: int = 0
+    detail: str = ""
+
+
+def _run(cmd: Sequence[str], cwd: str, report: list[ToolRun] | None = None) -> str | None:
     if not shutil.which(cmd[0]):
+        if report is not None:
+            report.append(ToolRun(cmd[0], "missing", detail="not installed on this runner"))
         return None
     proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
-    return proc.stdout or None
+    if not proc.stdout:
+        if report is not None:
+            tail = (proc.stderr or "").strip().splitlines()
+            report.append(
+                ToolRun(cmd[0], "error", detail=f"exit {proc.returncode}: {tail[-1] if tail else 'no output'}"[:200])
+            )
+        return None
+    return proc.stdout
 
 
 def parse_osv(output: str, default_file: str = "requirements/base.txt") -> list[Finding]:
@@ -214,8 +238,11 @@ def parse_semgrep(output: str) -> list[Finding]:
     return findings
 
 
-def run_scanners(repo_dir: str, tools: Sequence[str] = ("osv-scanner", "pip-audit", "semgrep")) -> list[Finding]:
+def run_scanners(
+    repo_dir: str, tools: Sequence[str] = ("osv-scanner", "pip-audit", "semgrep")
+) -> tuple[list[Finding], list[ToolRun]]:
     findings: list[Finding] = []
+    report: list[ToolRun] = []
     if "osv-scanner" in tools:
         # osv-scanner v2 only recognises a requirements file by name, so each
         # of Superset's requirements/*.txt is passed explicitly.
@@ -223,20 +250,26 @@ def run_scanners(repo_dir: str, tools: Sequence[str] = ("osv-scanner", "pip-audi
         for req in ("requirements/base.txt", "requirements/development.txt"):
             if os.path.exists(os.path.join(repo_dir, req)):
                 args += ["-L", f"requirements.txt:{req}"]
-        out = _run(args, repo_dir)
+        out = _run(args, repo_dir, report)
         if out:
-            findings += parse_osv(out)
+            parsed = parse_osv(out)
+            findings += parsed
+            report.append(ToolRun("osv-scanner", "ok", len(parsed)))
     if "pip-audit" in tools:
         for req in ("requirements/base.txt", "requirements/development.txt"):
             if os.path.exists(os.path.join(repo_dir, req)):
-                out = _run(["pip-audit", "-r", req, "-f", "json", "--progress-spinner", "off"], repo_dir)
+                out = _run(["pip-audit", "-r", req, "-f", "json", "--progress-spinner", "off"], repo_dir, report)
                 if out:
-                    findings += parse_pip_audit(out, req)
+                    parsed = parse_pip_audit(out, req)
+                    findings += parsed
+                    report.append(ToolRun("pip-audit", "ok", len(parsed), detail=req))
     if "semgrep" in tools:
-        out = _run(["semgrep", "--config", "p/python", "--json", "--quiet", "superset"], repo_dir)
+        out = _run(["semgrep", "--config", "p/python", "--json", "--quiet", "superset"], repo_dir, report)
         if out:
-            findings += parse_semgrep(out)
-    return collapse(findings)
+            parsed = parse_semgrep(out)
+            findings += parsed
+            report.append(ToolRun("semgrep", "ok", len(parsed)))
+    return collapse(findings), report
 
 
 # -- finding -> issue ---------------------------------------------------------

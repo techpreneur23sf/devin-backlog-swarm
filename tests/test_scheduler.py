@@ -1,6 +1,6 @@
-from swarm.models import DISPATCHED, QUEUED, Task
+from swarm.models import DISPATCHED, QUEUED, Ledger, Task, now
 from swarm.policy import Policy
-from swarm.scheduler import plan, scopes_overlap
+from swarm.scheduler import plan, reserved_acus_today, scopes_overlap
 
 POLICY = Policy.load("policy.yaml")
 
@@ -43,7 +43,7 @@ def test_concurrency_cap_is_respected():
 def test_daily_acu_cap_stops_dispatch():
     go, skipped = plan([q(1)], [], POLICY, acus_spent_today=POLICY.budget.daily_acu_cap)
     assert not go
-    assert "budget" in skipped[0][1].lower() or "acu" in skipped[0][1].lower()
+    assert "ACU cap" in skipped[0][1].lower() or "acu" in skipped[0][1].lower()
 
 
 def test_priority_order_follows_policy():
@@ -61,3 +61,39 @@ def test_exhausted_attempts_are_not_redispatched():
     go, skipped = plan([t], [], POLICY, acus_spent_today=0)
     assert not go
     assert "attempt" in skipped[0][1].lower()
+
+
+def test_the_daily_cap_binds_even_when_the_account_reports_no_acus():
+    """An unmetered plan reports 0.0 ACUs forever; reservations still cap the day."""
+    ledger = Ledger(repo="owner/name")
+    per_task = POLICY.acu_limit("dep-bump-patch")
+    count = int(POLICY.budget.daily_acu_cap // per_task) + 1
+    for n in range(count):
+        t = Task(issue_number=n, state=DISPATCHED, issue_class="dep-bump-patch")
+        t.dispatched_at = now()
+        t.acus_consumed = 0.0  # what the API reports on this plan
+        ledger.upsert(t)
+
+    reserved = reserved_acus_today(ledger, POLICY)
+    assert reserved == count * per_task > POLICY.budget.daily_acu_cap
+
+    go, skipped = plan([q(99, scope=["superset/x.py"])], [], POLICY, acus_spent_today=reserved)
+    assert not go
+    assert "ACU cap" in skipped[0][1]
+
+
+def test_observed_consumption_wins_when_it_exceeds_the_reservation():
+    ledger = Ledger(repo="owner/name")
+    t = Task(issue_number=1, state=DISPATCHED, issue_class="dep-bump-patch")
+    t.dispatched_at = now()
+    t.acus_consumed = 99.0
+    ledger.upsert(t)
+    assert reserved_acus_today(ledger, POLICY) == 99.0
+
+
+def test_yesterdays_dispatches_do_not_spend_todays_budget():
+    ledger = Ledger(repo="owner/name")
+    t = Task(issue_number=1, state=DISPATCHED, issue_class="dep-bump-patch")
+    t.dispatched_at = now() - 2 * 86400
+    ledger.upsert(t)
+    assert reserved_acus_today(ledger, POLICY) == 0.0

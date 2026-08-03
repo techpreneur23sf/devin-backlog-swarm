@@ -124,6 +124,23 @@ def review_findings(gh: GitHubClient, pr_number: int) -> tuple[int, str]:
     return findings, body
 
 
+def _review_from_github(gh: GitHubClient | None, pr_number: int | None) -> tuple[str, dict[str, Any] | None]:
+    """The verdict as the reviewer published it, or `pending` if it has not.
+
+    A review the API will not admit to is still a review a human can read.
+    """
+    if gh is None or pr_number is None:
+        return "pending", None
+    findings, body = review_findings(gh, pr_number)
+    if not body and not findings:
+        return "pending", None
+    return ("clean" if findings == 0 else "comments"), {
+        "source": "github",
+        "findings": findings,
+        "summary": body[:400],
+    }
+
+
 def review_status_for(
     devin: DevinClient, pr_url: str, gh: GitHubClient | None = None, pr_number: int | None = None
 ) -> tuple[str, dict[str, Any] | None]:
@@ -134,9 +151,13 @@ def review_status_for(
         return "pending", None
     items = data.get("items") if isinstance(data, dict) else None
     review = (items or [None])[0] if items else (data if isinstance(data, dict) and data.get("status") else None)
-    if not review:
-        return "pending", None
-    status = (review.get("status") or "").lower()
+    if not isinstance(review, dict) or not isinstance(review.get("status"), str):
+        # An RFC7807 error body is also a dict with a `status` — an integer one.
+        # The API also 404s for a review it *has* published, when the head commit
+        # has moved since; the reviewer's own PR review is the durable record, so
+        # ask GitHub before concluding nothing has happened.
+        return _review_from_github(gh, pr_number)
+    status = review["status"].lower()
     verdict = (review.get("verdict") or review.get("result") or "").lower()
     if status in ("running", "queued", "pending", "in_progress"):
         return "pending", review
@@ -176,6 +197,32 @@ def reconcile(
         except Exception as exc:  # one bad task must not stall the loop
             task.last_error = f"{type(exc).__name__}: {exc}"[:500]
             log.append(f"#{task.issue_number}: reconcile error: {task.last_error}")
+
+    log.extend(backfill_effort(devin, ledger))
+    return log
+
+
+def backfill_effort(devin: DevinClient, ledger: Ledger) -> list[str]:
+    """Fill in effort for finished tasks, including terminal ones.
+
+    A merged task is never reconciled again, so cost reporting would only ever
+    cover work still in flight — the opposite of what a leader wants to see.
+    One insights call per session, once, forever.
+    """
+    log: list[str] = []
+    for task in ledger.tasks.values():
+        if not task.session_id or task.session_size:
+            continue
+        try:
+            insights = devin.get_insights(task.session_id) or {}
+        except Exception as exc:
+            log.append(f"#{task.issue_number}: insights unavailable: {type(exc).__name__}")
+            continue
+        if not insights.get("session_size"):
+            continue
+        task.session_size = insights["session_size"]
+        task.devin_messages = int(insights.get("num_devin_messages") or 0)
+        task.acus_consumed = float(insights.get("acus_consumed") or task.acus_consumed or 0)
     return log
 
 
@@ -198,6 +245,14 @@ def _reconcile_task(
         task.acus_consumed = float(session.get("acus_consumed") or task.acus_consumed or 0)
         if session.get("structured_output"):
             task.structured_output = session["structured_output"]
+        # Effort, once, when the session is over. On a plan that does not meter
+        # ACUs the session API reports 0.0 for every session, so size class and
+        # message count are the only usage signals the API will give us.
+        if session.get("status") in ("suspended", "exit", "blocked") and not task.session_size:
+            insights = devin.get_insights(task.session_id) or {}
+            task.session_size = insights.get("session_size")
+            task.devin_messages = int(insights.get("num_devin_messages") or 0)
+            task.acus_consumed = float(insights.get("acus_consumed") or task.acus_consumed or 0)
 
     # 1. Session-derived state -------------------------------------------------
     if task.session_status_detail == "waiting_for_user":

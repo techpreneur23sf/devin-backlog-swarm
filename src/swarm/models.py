@@ -65,6 +65,10 @@ class Task:
     review_status: str | None = None
     structured_output: dict[str, Any] | None = None
     acus_consumed: float = 0.0
+    #: Devin's own size classification of the session: xs | s | m | l | xl
+    session_size: str | None = None
+    #: messages Devin sent — a coarse effort signal that works on any plan
+    devin_messages: int = 0
     attempts: int = 0
     created_at: int = field(default_factory=now)
     dispatched_at: int | None = None
@@ -161,6 +165,9 @@ class Ledger:
 
     def queued(self) -> list[Task]:
         return [t for t in self.tasks.values() if t.state == QUEUED]
+
+    def dispatched_since(self, since: int) -> list[Task]:
+        return [t for t in self.tasks.values() if (t.dispatched_at or 0) >= since]
 
     def to_dict(self) -> dict[str, Any]:
         return {

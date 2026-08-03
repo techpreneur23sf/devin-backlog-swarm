@@ -213,6 +213,28 @@ with the design.
   unmetered-ACU note above: a cap enforced against a number the plan never
   populates is not a cap. Found by asking why every nightly run reported
   "0.0 / 120 ACUs" after dispatching six sessions.
+- **An error body was parsed as a review.** `GET /pr-reviews` returns RFC7807
+  problem+json, which is also a dict with a `status` — the integer `404`. The
+  verdict parser lowercased it and the tick died with `AttributeError: 'int'
+  object has no attribute 'lower'`, on every freshly opened PR, because "no
+  review yet" *is* a 404. Fixed by typing the field, not by catching the
+  exception.
+- **The review API 404s for reviews it has published.** `No review found for PR
+  #39 at commit 8e451bfa`: once the head commit moves, the API disowns the
+  review that is sitting on the PR. The reviewer's PR review is the durable
+  record, so a 404 now falls back to reading GitHub before concluding nothing
+  has happened. Without it, PR #39 would have waited for a verdict that had
+  already been delivered.
+- **The weekly scan cron had been failing since it was installed.** `swarm scan`
+  built a Devin client it never uses, so it died on a missing `DEVIN_API_KEY`
+  that the scan workflow correctly does not pass. Intake is GitHub-only now, like
+  `verify`.
+- **A crashed scanner looked like a clean repository.** `pip-audit` resolves the
+  requirements file in a throwaway venv and fails below Python 3.11, which
+  Superset's own metadata requires — contributing zero findings, silently.
+  Scanners now report `ok | missing | error` with their stderr tail, and a scan
+  where nothing ran exits nonzero. An empty backlog is only good news if
+  something looked.
 - **A stale fixture replayed green.** The recorded run predated the reviewer
   change, so the documented stranger path emitted `ReplayMiss` for every review
   request — and still exited 0, because the loop deliberately swallows per-task

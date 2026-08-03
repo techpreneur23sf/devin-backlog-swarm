@@ -124,6 +124,23 @@ def review_findings(gh: GitHubClient, pr_number: int) -> tuple[int, str]:
     return findings, body
 
 
+def _review_from_github(gh: GitHubClient | None, pr_number: int | None) -> tuple[str, dict[str, Any] | None]:
+    """The verdict as the reviewer published it, or `pending` if it has not.
+
+    A review the API will not admit to is still a review a human can read.
+    """
+    if gh is None or pr_number is None:
+        return "pending", None
+    findings, body = review_findings(gh, pr_number)
+    if not body and not findings:
+        return "pending", None
+    return ("clean" if findings == 0 else "comments"), {
+        "source": "github",
+        "findings": findings,
+        "summary": body[:400],
+    }
+
+
 def review_status_for(
     devin: DevinClient, pr_url: str, gh: GitHubClient | None = None, pr_number: int | None = None
 ) -> tuple[str, dict[str, Any] | None]:
@@ -136,9 +153,10 @@ def review_status_for(
     review = (items or [None])[0] if items else (data if isinstance(data, dict) and data.get("status") else None)
     if not isinstance(review, dict) or not isinstance(review.get("status"), str):
         # An RFC7807 error body is also a dict with a `status` — an integer one.
-        # "no review yet" arrives as 404, so this path is the common case, not
-        # the exceptional one.
-        return "pending", None
+        # The API also 404s for a review it *has* published, when the head commit
+        # has moved since; the reviewer's own PR review is the durable record, so
+        # ask GitHub before concluding nothing has happened.
+        return _review_from_github(gh, pr_number)
     status = review["status"].lower()
     verdict = (review.get("verdict") or review.get("result") or "").lower()
     if status in ("running", "queued", "pending", "in_progress"):

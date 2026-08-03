@@ -83,3 +83,18 @@ def test_env_overrides_budget_and_kill_switch(monkeypatch):
     p = Policy.load("policy.yaml")
     assert p.budget.max_concurrent_sessions == 2
     assert p.kill_switch
+
+
+def test_an_error_body_is_not_mistaken_for_a_review():
+    """`GET /pr-reviews` 404s with an RFC7807 body whose `status` is an int.
+
+    Treating that as a review crashed the reconcile tick for the whole task.
+    """
+    from swarm.reconcile import review_status_for
+
+    class Devin:
+        def get_pr_review(self, pr_url):
+            return {"type": "about:blank", "title": "Not Found", "status": 404, "detail": "No review found"}
+
+    status, review = review_status_for(Devin(), "https://github.com/o/r/pull/1")
+    assert (status, review) == ("pending", None)

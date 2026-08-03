@@ -134,9 +134,12 @@ def review_status_for(
         return "pending", None
     items = data.get("items") if isinstance(data, dict) else None
     review = (items or [None])[0] if items else (data if isinstance(data, dict) and data.get("status") else None)
-    if not review:
+    if not isinstance(review, dict) or not isinstance(review.get("status"), str):
+        # An RFC7807 error body is also a dict with a `status` — an integer one.
+        # "no review yet" arrives as 404, so this path is the common case, not
+        # the exceptional one.
         return "pending", None
-    status = (review.get("status") or "").lower()
+    status = review["status"].lower()
     verdict = (review.get("verdict") or review.get("result") or "").lower()
     if status in ("running", "queued", "pending", "in_progress"):
         return "pending", review

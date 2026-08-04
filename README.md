@@ -12,6 +12,15 @@ It runs entirely on GitHub Actions. No service, no database, nothing to keep up.
 
 ## Try it without a Devin API key
 
+With Docker — nothing to install, no credentials, no network calls:
+
+```bash
+docker run --rm ghcr.io/techpreneur23sf/devin-backlog-swarm:main \
+  replay --replay fixtures/run-2026-08-03/
+```
+
+Or from a clone, if you would rather read the code as it runs:
+
 ```bash
 git clone https://github.com/techpreneur23sf/devin-backlog-swarm
 cd devin-backlog-swarm
@@ -19,12 +28,36 @@ pip install -e .
 swarm replay --replay fixtures/run-2026-08-03/
 ```
 
-That walks a **recorded run of the real thing** — actual Devin and GitHub API
+Either walks a **recorded run of the real thing** — actual Devin and GitHub API
 responses captured from the live swarm operating on
 [techpreneur23sf/apache-superset](https://github.com/techpreneur23sf/apache-superset).
 No credentials, no network calls. An unrecorded request raises `ReplayMiss`
 rather than falling back to anything, because fixtures are recordings and replay
 never invents data.
+
+## Docker
+
+The image is the unit of deployment: `ghcr.io/techpreneur23sf/devin-backlog-swarm:main`,
+rebuilt on every push to `main` and tagged by commit SHA. The workflows in the
+target repository run *this image* — they pass credentials in and do nothing
+else — so what runs in CI is byte-identical to what runs on your laptop.
+
+```bash
+docker build -t swarm .
+
+# offline, no credentials
+docker run --rm swarm replay --replay fixtures/run-2026-08-03/
+
+# against a live repository
+docker run --rm \
+  -e GITHUB_TOKEN -e DEVIN_API_KEY -e DEVIN_ORG_ID \
+  -e SWARM_REPO=owner/repo \
+  swarm --run-id local-1 reconcile
+```
+
+`ENTRYPOINT` is `swarm`, so anything in the command table below works as
+`docker run ... swarm <command>`. `policy.yaml` and the fixtures are baked in;
+mount your own with `-v $PWD/policy.yaml:/app/policy.yaml`.
 
 ## What runs where
 
@@ -91,9 +124,10 @@ The daily cap is enforced against `max(reserved, observed)`, where each dispatch
 reserves its class's per-session ACU limit. That is not belt-and-braces: Devin
 meters ACUs on Enterprise plans, and reports `acus_consumed: 0.0` on plans billed
 as quota plus on-demand credits — a cap compared against an unmetered zero would
-never bind. For the same reason the dashboard reports "not metered" rather than a
-cost per merged PR of 0.0, and falls back to the effort signals the API does
-return per session (`session_size`, Devin message counts, wall-clock time).
+never bind. For the same reason the dashboard shows no cost card at all on such a
+plan rather than a cost per merged PR of 0.0, and reports the effort signals the
+API does return per session (`session_size`, Devin message counts, wall-clock
+time).
 
 ## Commands
 
